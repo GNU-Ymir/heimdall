@@ -67,9 +67,7 @@ pub def ActorSystem: sys::ActorSystem;
  *    // @warning: Actor is not yet attached to system in the ctor
  *    pub self () {}
  *
- *    /**
- *     * Actor is attached to a system and system is ready
- *     */
+ *    // Actor is attached to a system and system is ready
  *    pub over onStart(mut self) {
  *        let dmut alice = self.system:.local("alice");
  *
@@ -98,7 +96,9 @@ pub def ActorSystem: sys::ActorSystem;
  * }
  *
  *
- * fn main() {
+ * fn main()
+ *    throws ActorError
+ * {
  *    let dmut sys = copy ActorSystem();
  *    sys:.add("alice", copy AliceActor());
  *    sys:.add("bob", copy BobActor());
