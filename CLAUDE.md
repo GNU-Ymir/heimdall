@@ -96,6 +96,12 @@ The build system is `gyllir`, with `gyc` on `PATH` (`compiler` in `gyllir.toml`)
   socket must not depend on a fixed port another test may hold.
 - Keep gyc's unused-import warning `E3038` at zero; it only credits a `use` when a symbol is
   reached through the shortened path.
+- Doc examples: `dev/check-examples.sh` (`-j N`, `-f SUBSTR`, `-k`, `-v`, `GYC=…`) extracts every
+  fenced block of the `/** */` comments of `src/` (`dev/extract-examples.awk`, as midgard's) and
+  compiles it with `gyc -fsyntax-only -funittest -I src/heimdall.yr` — `-I` takes a package's
+  root file, not a directory. The extractor ends a doc comment at the first `*/`, so a nested
+  `/** */` inside an example hides it from the check: comment examples with `//`. A ```` ```text ````
+  fence opts a block out.
 
 ### The ymir-dev workspace (`../..`)
 
