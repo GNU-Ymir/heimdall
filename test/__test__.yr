@@ -4,3 +4,4 @@ mod .helpers;
 mod .errors;
 
 mod .actor;
+mod .http;
