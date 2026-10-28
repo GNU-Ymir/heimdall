@@ -1,0 +1,81 @@
+name: CI
+
+#   build ---> test
+#         \--> examples
+#
+# The build job compiles ./heimdall.test once and populates the layer cache; the others run what
+# it produced.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Unique per run: two concurrent runs share one docker daemon. Dropped by the `cleanup` job.
+  IMAGE: heimdall-build:${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  build:
+    name: Build heimdall
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-image
+        with:
+          tag: ${{ env.IMAGE }}
+          cache-to: "true"
+
+      # A warning does not stop a debug build, so it is read back from the log kept in the image
+      # (the layer may come from the cache and print nothing) and fails the job here.
+      - name: Fail on compiler warnings
+        run: |
+          set -euo pipefail
+          docker run --rm "$IMAGE" cat build.log | sed 's/\x1b\[[0-9;]*m//g' > build.log
+          if grep -n '^Warning' build.log; then
+            echo "::error::the build of heimdall emits compiler warnings, see above"
+            exit 1
+          fi
+
+  test:
+    name: Tests
+    needs: build
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-image
+        with:
+          tag: ${{ env.IMAGE }}
+
+      # Sequential: under -j the suite trips MID-143 (EINTR read as a closed socket).
+      - name: Run the tests
+        run: docker run --rm "$IMAGE" ./heimdall.test -sf
+
+  examples:
+    name: Doc examples
+    needs: build
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-image
+        with:
+          tag: ${{ env.IMAGE }}
+
+      - name: Compile the examples of the doc comments
+        run: docker run --rm "$IMAGE" ./dev/check-examples.sh
+
+  cleanup:
+    name: Cleanup
+    if: always()
+    needs: [build, test, examples]
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - name: Drop this run's image tag
+        run: docker image rm -f "$IMAGE" || true

@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Prints a markdown changelog for the release workflows: one entry per merged pull request
+# between the previous release tag and the ref being released. The commits inside a PR are
+# implementation detail and are not listed - only the PR title is.
+#
+# A PR title must read `[HTTPS-XXX][kind] Log`, where `HTTPS-XXX` is the Plane work item and `[kind]`
+# is optional, defaulting to a feature. Recognised kinds: feat/feature, fix, perf, refactor, doc(s),
+# test(s), chore/ci/build/style, breaking. A PR whose title does not follow that format - no
+# issue key, or a kind that is not in the list - is left out of the changelog entirely; each skip
+# is reported on stderr so it shows up in the release job log.
+#
+# Usage:
+#   changelog.sh [--since <ref>] [--to <ref>]   # the changelog itself
+#   changelog.sh [--to <ref>] --print-base      # just the resolved base tag (empty if none)
+#
+# With no --since, the base is the most recent `<major>.<minor>.<patch>` tag reachable from --to
+# (any other tag is not matched), so this works for release.yml, where the tag being created does
+# not exist yet.
+#
+# @warning: needs the full history, so the workflow must check out with `fetch-depth: 0`.
+set -euo pipefail
+
+TO="HEAD"
+FROM=""
+FROM_SET=0
+PRINT_BASE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --since) FROM="${2-}"; FROM_SET=1; shift 2 ;;
+    --to) TO="${2-}"; shift 2 ;;
+    --print-base) PRINT_BASE=1; shift ;;
+    *) echo "changelog.sh: unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [ "$FROM_SET" -eq 0 ]; then
+  FROM="$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' "$TO" 2>/dev/null || true)"
+fi
+
+if [ "$PRINT_BASE" -eq 1 ]; then
+  echo "$FROM"
+  exit 0
+fi
+
+if [ -n "$FROM" ]; then
+  RANGE="${FROM}..${TO}"
+else
+  # No release tag yet: the changelog covers the whole history.
+  RANGE="$TO"
+fi
+
+# --first-parent so only what landed *on* the released branch is walked, never the commits a
+# feature branch carries or the merges it took from master along the way. It is deliberately not
+# `--merges`: a squash-merged pull request is a single-parent commit, so filtering on merge
+# commits would drop every squashed PR before awk could even report the skip. Selecting the pull
+# requests is the parser's job below - a first-parent commit matching neither merge shape is a
+# direct push, and is skipped there. Both the subject and the body are needed to recover the PR
+# title - which of the two holds it depends on the merge shape, see below - hence \037 (unit
+# separator) between the fields and \036 (record separator) between commits: neither can appear
+# in a commit message.
+git log --first-parent --pretty=format:'%h%x1f%s%x1f%b%x1e' "$RANGE" | awk '
+function trim(s) {
+  gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", s)
+  return s
+}
+
+# The first non-empty line of a commit body, trimmed.
+function firstLine(s,   cnt, lines, i, line) {
+  cnt = split(s, lines, "\n")
+  for (i = 1; i <= cnt; i++) {
+    line = trim(lines[i])
+    if (line != "") return line
+  }
+  return ""
+}
+
+BEGIN {
+  RS = "\036"
+  FS = "\037"
+
+  n = split("breaking feat fix perf refactor docs test chore", order, " ")
+  title["breaking"] = "Breaking changes"
+  title["feat"]     = "Features"
+  title["fix"]      = "Bug fixes"
+  title["perf"]     = "Performance"
+  title["refactor"] = "Refactoring"
+  title["docs"]     = "Documentation"
+  title["test"]     = "Tests"
+  title["chore"]    = "Chores"
+
+  kinds["feat"] = "feat"; kinds["feature"] = "feat"
+  kinds["fix"] = "fix"; kinds["bugfix"] = "fix"; kinds["bug"] = "fix"
+  kinds["perf"] = "perf"
+  kinds["refactor"] = "refactor"
+  kinds["doc"] = "docs"; kinds["docs"] = "docs"
+  kinds["test"] = "test"; kinds["tests"] = "test"
+  kinds["chore"] = "chore"; kinds["ci"] = "chore"; kinds["build"] = "chore"; kinds["style"] = "chore"
+  kinds["breaking"] = "breaking"; kinds["break"] = "breaking"
+}
+
+{
+  sha = $1; subj = $2; msg = $3
+  gsub(/^[\n\r]+/, "", sha)
+  if (sha == "") next
+
+  # GitHub writes a pull request merge in one of two shapes, and this repository has both:
+  #   - `Merge pull request #N from owner/branch`, the PR title being the first body line;
+  #   - `<PR title> (#N)`, the body holding the PR description instead - often empty.
+  # Anything else went to the branch outside a pull request - a direct push, a version bump - and
+  # is not a change the notes announce.
+  pr = ""; head = ""
+
+  if (match(subj, /^Merge pull request #[0-9]+/)) {
+    match(subj, /#[0-9]+/)
+    pr = substr(subj, RSTART, RLENGTH)
+    head = firstLine(msg)
+  } else if (match(subj, /\(#[0-9]+\)[ \t\r]*$/)) {
+    pr = substr(subj, RSTART, RLENGTH)
+    sub(/^\(/, "", pr); sub(/\)[ \t\r]*$/, "", pr)
+    head = trim(substr(subj, 1, RSTART - 1))
+  }
+
+  if (pr == "") next
+
+  # A recognised merge whose title cannot be recovered is still a change - say so rather than
+  # dropping it without a trace, which is how a missing PR goes unnoticed.
+  if (head == "") {
+    print "changelog: ignoring " pr " (" sha "), no pull request title in the merge commit" > "/dev/stderr"
+    skipped++
+    next
+  }
+
+  # `[HTTPS-XXX][kind] Log`, the kind being optional.
+  rest = head; ticket = ""; kind = ""; text = head
+
+  if (match(rest, /^\[[^]]+\]/)) {
+    candidate = substr(rest, RSTART + 1, RLENGTH - 2)
+    if (candidate ~ /^[A-Za-z]+-[0-9]+$/) {
+      ticket = toupper(candidate)
+      rest = substr(rest, RSTART + RLENGTH)
+      sub(/^[ \t]+/, "", rest)
+
+      if (match(rest, /^\[[^]]*\]/)) {
+        kind = tolower(substr(rest, RSTART + 1, RLENGTH - 2))
+        rest = substr(rest, RSTART + RLENGTH)
+        sub(/^[ \t]+/, "", rest)
+      }
+
+      text = rest
+    }
+  }
+
+  text = trim(text)
+
+  # Off-format titles are dropped rather than guessed at, but never silently: the skip goes to
+  # stderr so the release job log says which PRs were left out of the notes.
+  if (ticket == "") {
+    print "changelog: ignoring " pr " (" sha "), title does not start with an issue key: " head > "/dev/stderr"
+    skipped++
+    next
+  }
+
+  if (kind == "") {
+    # A kind-less title is a feature, as agreed in the PR title convention.
+    type = "feat"
+  } else if (kind in kinds) {
+    type = kinds[kind]
+  } else {
+    print "changelog: ignoring " pr " (" sha "), unknown kind [" kind "]: " head > "/dev/stderr"
+    skipped++
+    next
+  }
+
+  if (text == "") {
+    print "changelog: ignoring " pr " (" sha "), title has no text after its tags: " head > "/dev/stderr"
+    skipped++
+    next
+  }
+
+  body[type] = body[type] "- **" ticket "** " text " (" pr ")\n"
+  count++
+}
+
+END {
+  if (count == 0) {
+    if (skipped > 0) {
+      print "_No pull request with a conforming title in this range._"
+    } else {
+      print "_No pull requests merged._"
+    }
+    exit
+  }
+
+  first = 1
+  for (i = 1; i <= n; i++) {
+    s = order[i]
+    if (s in body) {
+      if (!first) print ""
+      printf "### %s\n", title[s]
+      printf "%s", body[s]
+      first = 0
+    }
+  }
+}
+'

@@ -1,0 +1,176 @@
+in http;
+
+use std::algorithm::searching;
+use std::fs::path;
+use std::io;
+use std::net::addr;
+use std::net::tcp;
+use std::stream;
+use std::time::dur;
+
+use heimdall::http;
+
+use helpers;
+
+fn onHello(_: HttpRequest)-> HttpResponse {
+    HttpResponse(200u32, body-> "hello")
+}
+
+fn onEcho(rqt: HttpRequest)-> HttpResponse {
+    HttpResponse(200u32, body-> rqt.body)
+}
+
+fn onParam(rqt: HttpRequest)-> HttpResponse {
+    if let Ok(v) = rqt.parameters["name"] {
+        HttpResponse(200u32, body-> v)
+    } else {
+        HttpResponse(400u32)
+    }
+}
+
+/**
+ * Start a server answering `/hello`, `/echo` (POST) and `/param` on the loopback, on the first
+ * free port of a small range
+ * @info: `TcpListener` reports the address it was built with, never the one the kernel picked,
+ *        so a port cannot be left to the kernel and has to be searched for instead
+ * */
+fn startOnLoopback()-> dmut &HttpServer
+    throws HttpError
+{
+    let mut last: (&HttpError)? = none;
+    for i in 0u16 .. 32u16 {
+        {
+            let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 35180u16 + i), nbThreads-> 2u32);
+            server:.route(Path("/hello"), &onHello);
+            server:.route(Path("/echo"), &onEcho, method-> HttpRequestKind::POST);
+            server:.route(Path("/param"), &onParam);
+            server:.start();
+
+            return alias server;
+        } catch {
+            err: &HttpError => { last = err?; }
+        }
+    }
+
+    if let Ok(err) = last { throw err; }
+
+    throw copy HttpError(500u32, msg-> "no free loopback port in the probed range");
+}
+
+/**
+ * @returns: everything the server at `port` answers to `raw`, read until it closes the connection
+ * */
+fn exchange(port: u16, raw: [c8])-> [c8] {
+    let dmut response = copy StringStream();
+    {
+        let dmut client = TcpStream::connect(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), port));
+        client:.setRecvTimeout(dur::seconds(5u64));
+        client:.sendRaw(raw);
+
+        {
+            loop {
+                response:.write(client:.receive!{c8} ());
+            }
+        } catch {
+            _ => {}
+        }
+
+        client:.dispose();
+    } catch {
+        _ => {}
+    }
+
+    response[]
+}
+
+/**
+ * @returns: the answer of a fresh server to `raw`, the server being stopped before returning
+ * */
+fn roundTrip(raw: [c8])-> [c8]
+    throws HttpError
+{
+    let dmut server = startOnLoopback();
+    let response = exchange(server.port, raw);
+
+    server:.kill();
+    server:.join();
+
+    response
+}
+
+__test answersARoute {
+    {
+        let response = roundTrip("GET /hello HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(contains(response, "Content-Length: 5\r\n"), "b");
+        assert(contains(response, "Connection: close\r\n"), "c");
+        assert(contains(response, "\r\n\r\nhello"), "d");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test echoesTheBody {
+    {
+        let response = roundTrip("POST /echo HTTP/1.1\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nheimdall's body");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(contains(response, "\r\n\r\nheimdall's body"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test readsParameters {
+    {
+        let response = roundTrip("GET /param?flag&name=heimdall HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(contains(response, "\r\n\r\nheimdall"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test notFound {
+    {
+        let response = roundTrip("GET /missing HTTP/1.0\r\n\r\n");
+        assert(response.startsWith("HTTP/1.0 404 Not Found\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test methodNotAllowed {
+    {
+        let response = roundTrip("DELETE /hello HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 405 Method Not Allowed\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test malformedRequestLine {
+    {
+        let response = roundTrip("garbage\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 400 Bad Request\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test unknownMethod {
+    {
+        let response = roundTrip("BREW /hello HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 400 Bad Request\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test bodyTooLarge { // refused from its Content-Length, before any of the body is read
+    {
+        let response = roundTrip("POST /echo HTTP/1.1\r\nContent-Length: 200000000\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 413 Request Entity Too Large\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
