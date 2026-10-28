@@ -2,7 +2,7 @@
 in utils;
 
 use std::traits;
-use std::concurrency::actor::sys::message;
+use heimdall::actor::sys::message;
 use std::config::data;
 use std::conv::errors;
 use std::net::addr;

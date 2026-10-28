@@ -1,10 +1,12 @@
 in actor;
 
 
-use std::concurrency::actor;
 use std::config::_;
 use std::io;
 use std::time::_;
+
+use heimdall::actor;
+
 use helpers;
 
 class BobActor over ActorBase {
