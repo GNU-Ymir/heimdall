@@ -78,6 +78,11 @@ The layout of the other non-midgard Ymir projects (`../bootstrap`, `../ymir-lsp`
 There is no C code here: anything needing the runtime goes through midgard's public `std`/`core`/
 `etc` modules. A need for a new `_yrt_*` symbol is a midgard change (with its own `MID` item).
 
+`http/server.yr` and `actor/sys.yr` sit below `std` in two places, as midgard's own `std` modules
+do, since there is no wrapper above them: `etc::runtime::threads::{_yrt_get_nprocs,
+_yrt_thread_self_id}` and the raw C bindings `etc::c::{files, poll}` (`pipe`, `close`, epoll). A
+rename inside midgard's `_yrt_*` ABI therefore breaks heimdall too, and has to be followed here.
+
 ## Build / run / test
 
 The build system is `gyllir`, with `gyc` on `PATH` (`compiler` in `gyllir.toml`).
