@@ -10,6 +10,10 @@ __doc/
 .ymir_coverage_*
 .ymir_coverage.json
 
+# Produced artifacts
+/libheimdall.a
+/heimdall.test
+
 # IntelliJ project files
 .idea/
 
