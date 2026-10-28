@@ -1,0 +1,20 @@
+license = "GPL-v3"
+authors = ["Emile Cadorel <ecadorel@gmail.com>"]
+libraries = []
+type = "library"
+description = "HTTP server and actor system of Ymir"
+version = "0.1.0"
+name = "heimdall"
+package-root = "heimdall"
+
+[compiler]
+version = "1.11.0"
+
+[std]
+version = "1.17.0"
+url = "https://github.com/GNU-Ymir/yruntime.git"
+
+[dependencies]
+
+[registry]
+git = "git@github.com:GNU-Ymir/heimdall.git"
