@@ -1,0 +1,12 @@
+# The toolchain this repo is *built with* (not the version it is released as - that one lives in
+# gyllir.toml's top-level `version`). Sourced by every CI workflow to build the Dockerfile.
+#
+# - YMIR_BOOTSTRAP_VERSION / GCC_VERSION: the prebuilt `gyc` release, published as a .deb by
+#   github.com/GNU-Ymir/gymir (release tag = YMIR_BOOTSTRAP_VERSION, asset =
+#   gyc-<GCC major>_<YMIR_BOOTSTRAP_VERSION>_amd64.deb). It bundles the midgard heimdall is built
+#   against, so it has to match `[compiler]` and `[std]` in gyllir.toml.
+# - GYLLIR_VERSION: the `gyllir` release driving it, published by github.com/GNU-Ymir/Gyllir
+#   (release tag = GYLLIR_VERSION, asset = gyllir_<GYLLIR_VERSION>_amd64.deb).
+YMIR_BOOTSTRAP_VERSION=1.11.0
+GCC_VERSION=15.3.1
+GYLLIR_VERSION=1.10.0

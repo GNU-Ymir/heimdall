@@ -1,0 +1,11 @@
+.git
+.deps
+.target
+.idea
+.examples
+__doc
+/libheimdall.a
+/heimdall.test
+.ymir_test_success
+.ymir_coverage_*.json
+PLAN.md
