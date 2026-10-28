@@ -3,3 +3,6 @@
  * `std::concurrency` and `std::pack`.
  */
 in heimdall;
+
+pub mod ::actor;
+pub mod ::http;

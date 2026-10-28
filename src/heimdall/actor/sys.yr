@@ -14,7 +14,7 @@ use core::concurrency::{pipes::_, sync::_};
 
 use etc::c::{files, poll};
 
-use std::{net::_, time::_};
+use std::{net::{addr, tcp}, time::_};
 use std::concurrency::mail;
 use std::config::data;
 
@@ -22,10 +22,11 @@ use std::config::data;
  * Actor system used to register actors and manage communications using the actor design pattern
  * @example:
  * ```
- * use std::concurrency::actor;
  * use std::config::_;
  * use std::net::addr::_;
  * use std::conv::errors;
+ *
+ * use heimdall::actor;
  *
  * class MyActor over ActorBase {
  *    pub self () {}
@@ -268,8 +269,9 @@ pub class ActorSystem {
      * For example: if an actor add an new actor instance during its 'onQuit' method, the actor system won't send kill message to that new actor
      * @example:
      * ```
-     * use std::concurrency::actor;
      * use std::config::data;
+     *
+     * use heimdall::actor;
      *
      * class MyActor over ActorBase {
      *    pub self () {}

@@ -16,10 +16,11 @@ mod ::request;
  * Actor system used to register actors and manage communications using the actor design pattern
  * @example:
  * ```
- * use std::concurrency::actor;
  * use std::config::_;
  * use std::net::addr::_;
  * use std::conv::errors;
+ *
+ * use heimdall::actor;
  *
  * class MyActor over ActorBase {
  *    pub self () {}
@@ -58,8 +59,9 @@ pub def ActorSystem: sys::ActorSystem;
  * Base class of an actor
  * @example:
  * ```
- * use std::concurrency::actor;
  * use std::config::_;
+ *
+ * use heimdall::actor;
  *
  * class BobActor over ActorBase {
  *    // @warning: Actor is not yet attached to system in the ctor
@@ -114,11 +116,12 @@ pub def ActorBase: base::ActorBase;
  * A request future is an object record used to await for the response of an actor
  * @example:
  * ```
- * use std::concurrency::actor;
  * use std::config::_;
  * use std::net::addr::_;
  * use std::time::dur;
  * use std::conv::errors;
+ *
+ * use heimdall::actor;
  *
  * fn main ()
  *    throws CastFailure, ActorError

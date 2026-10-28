@@ -10,11 +10,12 @@ use std::time::instant;
  * A request future is an object record used to await for the response of an actor
  * @example:
  * ```
- * use std::concurrency::actor;
  * use std::config::_;
  * use std::net::addr::_;
  * use std::time::dur;
  * use std::conv::errors;
+ *
+ * use heimdall::actor;
  *
  * fn main ()
  *    throws CastFailure, ActorError

@@ -12,8 +12,9 @@ use std::config::data;
  * Base class of an actor
  * @example:
  * ```
- * use std::concurrency::actor::_;
  * use std::config::_;
+ *
+ * use heimdall::actor::_;
  *
  * class BobActor over ActorBase {
  *    // @warning: Actor is not yet attached to system in the ctor
