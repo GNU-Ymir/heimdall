@@ -34,9 +34,10 @@ The branch checked out is generally named `HTTPS-<issue_number>-<short-descripti
 
 PR titles must read `[HTTPS-XXX][kind] Log`, `[kind]` being optional and defaulting to a feature.
 Known kinds: `feat`/`feature`, `fix`, `perf`, `refactor`, `doc(s)`, `test(s)`,
-`chore`/`ci`/`build`/`style`, `breaking`. Once CI mirrors midgard's (see `PLAN.md`), the release
-notes are generated from these titles and the Plane sync attaches a PR to the work item of its
-leading tag and of nothing else: a title without a valid tag is left out of both, silently.
+`chore`/`ci`/`build`/`style`, `breaking`. The release notes are generated from these titles
+(`.github/scripts/changelog.sh`, one entry per merged PR), and the Plane sync
+(`.github/workflows/plane-sync.yml`) attaches a PR to the work item of its leading tag and of
+nothing else: a title without a valid tag is left out of both, silently.
 
 ## Policy
 
@@ -102,6 +103,22 @@ The build system is `gyllir`, with `gyc` on `PATH` (`compiler` in `gyllir.toml`)
   root file, not a directory. The extractor ends a doc comment at the first `*/`, so a nested
   `/** */` inside an example hides it from the check: comment examples with `//`. A ```` ```text ````
   fence opts a block out.
+
+### Versions, CI and releases
+
+- `gyllir.toml`'s top-level `version` is heimdall's own release, and the git tag it is released
+  under (bare `X.Y.Z`, read by `.github/scripts/heimdall-version.sh`). Consumers depend on it as a
+  `git:` dependency filtered against those tags; a release has no asset.
+- `YMIR_VERSION` is the gyc/gyllir release it is *built with*, fetched as `.deb`s by the
+  `Dockerfile`. gyc bundles midgard, so `YMIR_BOOTSTRAP_VERSION` must stay in step with
+  `[compiler]` and `[std]` in `gyllir.toml`.
+- `.github/workflows/ci.yml`: the Dockerfile's `build` stage (`gyllir test --dry`, failing on any
+  compiler warning), then `./heimdall.test -sf` and `dev/check-examples.sh` in it. Tests run
+  sequentially there until MID-143 is fixed: under `-j`, an `EINTR` on a socket is read as a
+  closed connection.
+- `release.yml` (manual) builds the `test` stage, then tags `version` and publishes the notes;
+  `bump-{major,minor,patch}.yml` rewrite `version` and push to `master`.
+- Every job runs on `[self-hosted, linux, x64]`, as in the other Ymir repositories.
 
 ### The ymir-dev workspace (`../..`)
 

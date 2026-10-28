@@ -1,0 +1,108 @@
+name: Release
+
+# Manual: tags the current commit as gyllir.toml's `version` (bare, no leading v) and publishes a
+# GitHub release whose notes list the pull requests merged since the previous one. A library is
+# built from source by every package depending on it (`git:` dependency, version-filtered against
+# these tags), so there is no asset to attach. Bump the version before dispatching this again;
+# it fails instead of overwriting a version already released.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      # fetch-depth: 0 so the changelog step below has the history and the tags it walks.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The self-hosted runners have no gh CLI of their own; the release steps below need one.
+      - uses: ./.github/actions/setup-gh
+
+      - name: Compute toolchain build-args and version
+        id: version
+        run: |
+          set -euo pipefail
+          . ./YMIR_VERSION
+          GCC_MAJOR_VERSION="$(echo "$GCC_VERSION" | cut -d. -f1)"
+          {
+            echo "tag_name=$(bash .github/scripts/heimdall-version.sh)"
+            echo "gyc_release_tag=${YMIR_BOOTSTRAP_VERSION}"
+            echo "gyc_asset=gyc-${GCC_MAJOR_VERSION}_${YMIR_BOOTSTRAP_VERSION}_amd64.deb"
+            echo "gyllir_release_tag=${GYLLIR_VERSION}"
+            echo "gyllir_asset=gyllir_${GYLLIR_VERSION}_amd64.deb"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure this version has not already been released
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists - bump the version in gyllir.toml before releasing again."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists on origin (with no matching release) - bump the version in gyllir.toml before releasing again."
+            exit 1
+          fi
+
+      # The release body: one entry per pull request merged since the previous release (grouped
+      # by the `[kind]` of its title), then a compare link.
+      - name: Build release notes
+        env:
+          TAG: ${{ steps.version.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          BASE="$(bash .github/scripts/changelog.sh --print-base)"
+
+          {
+            echo "heimdall ${TAG} @ ${GITHUB_SHA}, built and tested with gyc ${{ steps.version.outputs.gyc_release_tag }}."
+            echo
+            if [ -n "$BASE" ]; then
+              echo "## What's changed since ${BASE}"
+            else
+              echo "## What's changed"
+            fi
+            echo
+            bash .github/scripts/changelog.sh --since "$BASE"
+            if [ -n "$BASE" ]; then
+              echo
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${BASE}...${TAG}"
+            fi
+          } > "${RUNNER_TEMP}/release-notes.md"
+
+          cat "${RUNNER_TEMP}/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The Dockerfile's `test` stage: builds heimdall and runs ./heimdall.test -sf, so a version
+      # whose tests fail is never tagged.
+      - name: Build and test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: test
+          push: false
+          build-args: |
+            GYC_RELEASE_TAG=${{ steps.version.outputs.gyc_release_tag }}
+            GYC_ASSET=${{ steps.version.outputs.gyc_asset }}
+            GYLLIR_RELEASE_TAG=${{ steps.version.outputs.gyllir_release_tag }}
+            GYLLIR_ASSET=${{ steps.version.outputs.gyllir_asset }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag_name }}
+        run: |
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            --title "Release $TAG" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md"
