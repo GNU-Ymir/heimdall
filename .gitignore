@@ -12,3 +12,6 @@ __doc/
 
 # IntelliJ project files
 .idea/
+
+# Working plan, kept out of the history
+PLAN.md
