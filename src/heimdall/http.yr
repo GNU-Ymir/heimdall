@@ -36,10 +36,10 @@ pub def HttpResponseCode: response::HttpResponseCode;
  * @example:
  * ```
  * use std::io; // println
- * use std::net::addr::_;
- * use std::fs::path; // Path
- * use std::config::_; // json
- * use std::conv::errors;
+ * use std::net;
+ * use std::fs; // Path
+ * use std::{config, config::json};
+ * use std::conv;
  *
  * use heimdall::http;
  *

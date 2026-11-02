@@ -6,7 +6,7 @@
 
 in header;
 
-use std::{net::addr, stream};
+use std::{net, stream};
 
 pub enum HttpRequestKind: u32
 | POST    = 0b000000001

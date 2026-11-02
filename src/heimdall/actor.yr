@@ -17,8 +17,8 @@ mod ::request;
  * @example:
  * ```
  * use std::config::_;
- * use std::net::addr::_;
- * use std::conv::errors;
+ * use std::net;
+ * use std::conv;
  *
  * use heimdall::actor;
  *
@@ -117,9 +117,9 @@ pub def ActorBase: base::ActorBase;
  * @example:
  * ```
  * use std::config::_;
- * use std::net::addr::_;
- * use std::time::dur;
- * use std::conv::errors;
+ * use std::net;
+ * use std::time;
+ * use std::conv;
  *
  * use heimdall::actor;
  *
@@ -134,7 +134,7 @@ pub def ActorBase: base::ActorBase;
  *    let dmut alice = a:.remote("alice", SockAddr(("127.0.0.1"s8).to!{&IpAddr} (), 8080u16));
  *
  *    // Send a request to the remote actor
- *    let dmut d = alice:.request(json#{"key" : "truc", "value" : 90}, timeout-> dur::seconds(2u64));
+ *    let dmut d = alice:.request(json#{"key" : "truc", "value" : 90}, timeout-> seconds(2u64));
  *
  *    // do some other computation asynchronously, meanwhile
  *

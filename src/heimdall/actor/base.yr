@@ -6,7 +6,7 @@
 
 in base;
 
-use std::config::data;
+use std::config;
 
 /**
  * Base class of an actor

@@ -6,9 +6,9 @@
 
 in reference;
 
-use std::config::data;
-use std::net::addr;
-use std::time::dur;
+use std::config;
+use std::net;
+use std::time;
 
 /**
  * A reference to a remote or a local actor

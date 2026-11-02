@@ -1,9 +1,9 @@
 in request;
 
-use core::concurrency::sync::semaphore;
+use core::concurrency;
 
-use std::config::data;
-use std::time::instant;
+use std::config;
+use std::time;
 
 
 /**
@@ -11,9 +11,9 @@ use std::time::instant;
  * @example:
  * ```
  * use std::config::_;
- * use std::net::addr::_;
- * use std::time::dur;
- * use std::conv::errors;
+ * use std::net;
+ * use std::time;
+ * use std::conv;
  *
  * use heimdall::actor;
  *
@@ -28,7 +28,7 @@ use std::time::instant;
  *    let dmut alice = a:.remote("alice", SockAddr(("127.0.0.1"s8).to!{&IpAddr} (), 8080u16));
  *
  *    // Send a request to the remote actor
- *    let dmut d = alice:.request(json#{"key" : "truc", "value" : 90}, timeout-> dur::seconds(2u64));
+ *    let dmut d = alice:.request(json#{"key" : "truc", "value" : 90}, timeout-> seconds(2u64));
  *
  *    // do some other computation asynchronously, meanwhile
  *

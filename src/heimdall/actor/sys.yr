@@ -10,21 +10,21 @@ mod ::message;
 
 use actor::sys::_;
 
-use core::concurrency::{pipes::_, sync::_};
+use core::concurrency;
 
 use etc::c::{files, poll};
 
-use std::{net::{addr, tcp}, time::_};
-use std::concurrency::mail;
-use std::config::data;
+use std::{net, net::tcp, time};
+use std::concurrency;
+use std::config;
 
 /**
  * Actor system used to register actors and manage communications using the actor design pattern
  * @example:
  * ```
  * use std::config::_;
- * use std::net::addr::_;
- * use std::conv::errors;
+ * use std::net;
+ * use std::conv;
  *
  * use heimdall::actor;
  *
@@ -92,7 +92,7 @@ pub class ActorSystem {
     let mut _epoll_fd: i32 = 0;
 
     // The timeout of new connections
-    let mut _connectionTimeout: Duration = dur::seconds(2);
+    let mut _connectionTimeout: Duration = seconds(2);
 
     // The number of retries when sending messages
     let mut _nbSendRetries: u32 = 3;
@@ -269,7 +269,7 @@ pub class ActorSystem {
      * For example: if an actor add an new actor instance during its 'onQuit' method, the actor system won't send kill message to that new actor
      * @example:
      * ```
-     * use std::config::data;
+     * use std::config;
      *
      * use heimdall::actor;
      *

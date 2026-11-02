@@ -6,9 +6,9 @@
 in message;
 
 use std::{io, stream};
-use std::config::data;
-use std::conv::errors;
-use std::net::addr;
+use std::config;
+use std::conv;
+use std::net;
 
 
 pub enum Protocol: u8

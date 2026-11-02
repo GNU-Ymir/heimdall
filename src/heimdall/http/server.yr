@@ -6,14 +6,13 @@
 
 in server;
 
-use core::concurrency::pipes::_;
-use core::concurrency::sync::semaphore;
+use core::concurrency;
 
 use etc::c::{files, poll};
 
-use std::{log, net::{addr, tcp}};
-use std::concurrency::mail;
-use std::fs::path;
+use std::{log, net, net::tcp};
+use std::concurrency;
+use std::fs;
 
 lazy __LOG__ = Logger("heimdall::http::server");
 
@@ -129,7 +128,7 @@ pub class HttpServer {
      * Set a route
      * @example:
      * ```
-     * use std::fs::path;
+     * use std::fs;
      *
      * use heimdall::http;
      *
@@ -226,7 +225,7 @@ pub class HttpServer {
      * Kill the http server
      * @example:
      * ```
-     * use std::fs::path;
+     * use std::fs;
      *
      * use heimdall::http;
      *

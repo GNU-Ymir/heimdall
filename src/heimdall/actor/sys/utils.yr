@@ -3,10 +3,10 @@ in utils;
 
 use std::traits;
 use heimdall::actor::sys::message;
-use std::config::data;
-use std::conv::errors;
-use std::net::addr;
-use std::time::instant;
+use std::config;
+use std::conv;
+use std::net;
+use std::time;
 
 /**
  * Job sent to an actor system

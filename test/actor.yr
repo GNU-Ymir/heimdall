@@ -100,7 +100,7 @@ __test requestTimeout { // a request nobody answers expires, and says which requ
     sys:.start();
 
     let dmut rf = sys:.local("nobody");
-    let dmut fut = rf:.request(json#{"q" : 1}, timeout-> dur::millis(200u64));
+    let dmut fut = rf:.request(json#{"q" : 1}, timeout-> millis(200u64));
 
     { fut:.value(); assert(false, "should have timed out"); }
     catch {
