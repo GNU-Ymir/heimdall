@@ -1,0 +1,104 @@
+name: Preview Release
+
+# Rolling pre-release, manually triggered (pick the branch/ref from the "Run workflow" button).
+# The tag/release name is the constant `preview`, independent of the package version: every run
+# replaces the previous preview, so there is only ever one preview tag and one preview release. The
+# name cannot collide with release.yml's bare <heimdallVersion> tags. As in release.yml there is no
+# asset: a library is built from source by the packages depending on it.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preview-release:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      # fetch-depth: 0 so the changelog step below has the history and the tags it walks.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The self-hosted runners have no gh CLI of their own; the release steps below need one.
+      - uses: ./.github/actions/setup-gh
+
+      - name: Compute toolchain build-args and version
+        id: version
+        run: |
+          set -euo pipefail
+          . ./YMIR_VERSION
+          GCC_MAJOR_VERSION="$(echo "$GCC_VERSION" | cut -d. -f1)"
+          {
+            echo "heimdall_version=$(bash .github/scripts/heimdall-version.sh)"
+            echo "gyc_release_tag=${YMIR_BOOTSTRAP_VERSION}"
+            echo "gyc_asset=gyc-${GCC_MAJOR_VERSION}_${YMIR_BOOTSTRAP_VERSION}_amd64.deb"
+            echo "gyllir_release_tag=${GYLLIR_VERSION}"
+            echo "gyllir_asset=gyllir_${GYLLIR_VERSION}_amd64.deb"
+            echo "tag_name=preview"
+          } >> "$GITHUB_OUTPUT"
+
+      # The preview body. The base is the last real release, never the previous preview: the
+      # `preview` tag is rolling (and deleted below), so diffing against it would be meaningless.
+      - name: Build release notes
+        env:
+          HEIMDALL_VERSION: ${{ steps.version.outputs.heimdall_version }}
+        run: |
+          set -euo pipefail
+
+          BASE="$(bash .github/scripts/changelog.sh --print-base)"
+
+          {
+            echo "Automated preview release of heimdall ${HEIMDALL_VERSION}, built from \`${GITHUB_REF_NAME}\` @ ${GITHUB_SHA} and tested with gyc ${{ steps.version.outputs.gyc_release_tag }}."
+            echo "This tag is rolling - it always points at the most recent preview build."
+            echo
+            if [ -n "$BASE" ]; then
+              echo "## What's changed since ${BASE}"
+            else
+              echo "## What's changed"
+            fi
+            echo
+            bash .github/scripts/changelog.sh --since "$BASE"
+            if [ -n "$BASE" ]; then
+              echo
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${BASE}...${GITHUB_SHA}"
+            fi
+          } > "${RUNNER_TEMP}/release-notes.md"
+
+          cat "${RUNNER_TEMP}/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The Dockerfile's `test` stage: builds heimdall and runs ./heimdall.test, so a commit whose
+      # tests fail is never previewed.
+      - name: Build and test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: test
+          push: false
+          build-args: |
+            GYC_RELEASE_TAG=${{ steps.version.outputs.gyc_release_tag }}
+            GYC_ASSET=${{ steps.version.outputs.gyc_asset }}
+            GYLLIR_RELEASE_TAG=${{ steps.version.outputs.gyllir_release_tag }}
+            GYLLIR_ASSET=${{ steps.version.outputs.gyllir_asset }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Replace existing preview tag/release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag_name }}
+        run: gh release delete "$TAG" --yes --cleanup-tag || true
+
+      - name: Publish preview release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag_name }}
+          HEIMDALL_VERSION: ${{ steps.version.outputs.heimdall_version }}
+        run: |
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            --title "Preview (heimdall ${HEIMDALL_VERSION})" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
+            --prerelease

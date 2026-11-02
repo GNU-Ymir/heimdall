@@ -1,0 +1,19 @@
+in errors;
+
+use std::format;
+
+use heimdall::{actor, http};
+
+use helpers;
+
+__test httpErrors { // heimdall::http
+    let notFound = format("{}", copy HttpError(404u32, msg-> "not found"));
+    assert(contains(notFound, "404"), "a");
+    assert(contains(notFound, "not found"), "b");
+
+    assert(contains(format("{}", copy HttpError(500u32)), "500"), "c");
+}
+
+__test actorErrors { // heimdall::actor
+    assert(contains(format("{}", copy ActorError("no such actor")), "no such actor"), "a");
+}
