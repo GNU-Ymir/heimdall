@@ -388,6 +388,11 @@ pub class HttpServer {
                 {
                     resp.send(alias sock);
                 } catch {
+                    // the client went away first: a connection a browser opened ahead of time and
+                    // closed unused, a page left before it finished loading. Nothing failed here
+                    err: &TcpError if err.code == TcpErrorCode::SOCKET_CLOSED => {
+                        __LOG__.debug("client closed the connection before the response was sent: ", err.msg);
+                    }
                     err => { __LOG__.warn("failed to send a response: ", err); }
                 }
 
