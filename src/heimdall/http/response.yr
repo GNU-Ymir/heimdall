@@ -116,14 +116,15 @@ pub record HttpResponse {
             _ => { sock:.sendRaw("HTTP/1.1 "); }
         }
 
+        let mut reason = "";
         for c in HttpResponseCode::__members__ {
-            if c._0 == self.code {
-                sock:.sendRaw(std::conv::to!{[c8]} (c._0));
-                sock:.sendRaw(" ");
-                sock:.sendRaw(c._1);
-                sock:.sendRaw("\r\n");
-            }
+            if c._0 == self.code { reason = c._1; break; }
         }
+
+        sock:.sendRaw(std::conv::to!{[c8]} (self.code));
+        sock:.sendRaw(" ");
+        sock:.sendRaw(reason);
+        sock:.sendRaw("\r\n");
 
         if self.header.contentType != "" {
             sock:.sendRaw("Content-Type: ");
