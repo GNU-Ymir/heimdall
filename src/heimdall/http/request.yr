@@ -340,17 +340,13 @@ pub record HttpRequest {
      * Trim a string by removing spaces in front and back of the string
      * */
     fn trim(self, line: [c8])-> [c8] {
-        if line.len == 0 { return line; }
+        let mut fst = 0us;
+        while fst < line.len && std::char::isWhite(line[fst]) { fst += 1us; }
 
-        let mut fst = 0us, mut end = 0us, mut started = false;
-        for i, c in line {
-            if !std::char::isWhite(c) {
-                if !started { fst = i; started = true; }
-                else { end = i; }
-            }
-        }
+        let mut end = line.len;
+        while end > fst && std::char::isWhite(line[end - 1us]) { end -= 1us; }
 
-        copy line[fst .. end + 1]
+        copy line[fst .. end]
     }
 
     /**
