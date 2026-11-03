@@ -6,6 +6,8 @@
 
 in server;
 
+mod ::utils;
+
 use core::concurrency;
 
 use etc::c::{files, poll};
@@ -71,8 +73,8 @@ pub class HttpServer {
      * ====================================================================================================
      */
 
-    // The list of rout
-    let mut _routes: [Path => mut(u32, dg (request::HttpRequest)-> response::HttpResponse)] = copy [];
+    // The routes the server answers
+    let dmut _router: &router::Router = copy router::Router();
 
     // Method called on 404 not found
     let mut _on404: (dg (request::HttpRequest)-> response::HttpResponse)? = none;
@@ -88,10 +90,11 @@ pub class HttpServer {
     /**
      * @params:
      *    - nbThreads: the number of worker thread in the task pool
+     *    - group: the group of the `#[route]` tags whose routes the server answers
      * @info: if nbThreads == 0, sets the number of cores available on the host machine
      * */
-    pub self (nbThreads: u32 = 0)
-        with self (SockAddr(Ipv4::UNSPECIFIED, 0), nbThreads-> nbThreads)
+    pub self (nbThreads: u32 = 0, group: [c8] = "")
+        with self (SockAddr(Ipv4::UNSPECIFIED, 0), nbThreads-> nbThreads, group-> group)
     {}
 
 
@@ -99,12 +102,17 @@ pub class HttpServer {
      * @params:
      *    - addr: the addresses accepted by the tcp listener
      *    - nbThreads: the number of worker thread in the task pool
+     *    - group: the group of the `#[route]` tags whose routes the server answers
      * @info: if nbThreads == 0, sets the number of cores available on the host machine
      */
-    pub self (addr: SockAddr, nbThreads: u32 = 0)
+    pub self (addr: SockAddr, nbThreads: u32 = 0, group: [c8] = "")
         with _addr = addr
         , _nbJobThreads = (if (nbThreads == 0) { etc::runtime::threads::_yrt_get_nprocs() } else { nbThreads + 1 })
     {
+        for r in router::Router::tagged(group) {
+            self._router:.add(r);
+        }
+
         let dmut pipes: [i32 ; 2] = [0, 0];
         if (files::pipe(pipes.ptr) == 0) {
             self._triggerI = (copy IPipe(pipe-> pipes[0]))?;
@@ -125,7 +133,8 @@ pub class HttpServer {
      */
 
     /**
-     * Set a route
+     * Set a route, replacing the routes matching the same paths
+     * @info: the path is a pattern, as the one of a `#[route]` tag, whose values the handler reads in `HttpRequest::pathParameters`
      * @example:
      * ```
      * use std::fs;
@@ -148,11 +157,11 @@ pub class HttpServer {
      * ```
      * */
     pub fn route(mut self, path: Path, sig: dg (request::HttpRequest)-> response::HttpResponse, method: u32 = header::HttpRequestKind::GET) {
-        self._routes[path] = (method, sig);
+        self._router:.set(router::route::Route(path.toStr(), method, sig));
     }
 
     /**
-     * Remove a route
+     * Remove the routes matching the same paths as `path`
      * @example
      * ```
      * let dmut server = copy HttpServer();
@@ -162,7 +171,7 @@ pub class HttpServer {
      * * ```
      * */
     pub fn del(mut self, path: Path) {
-        self._routes:.remove(path);
+        self._router:.remove(path.toStr());
     }
 
     /**
@@ -378,8 +387,8 @@ pub class HttpServer {
 
             if let Ok(dmut sock) = alias self._jobs:.receive() {
                 let resp = {
-                    let rqt = request::HttpRequest(alias sock);
-                    self.onRequest(rqt)
+                    let mut rqt = request::HttpRequest(alias sock);
+                    self.onRequest(ref rqt)
                 } catch {
                     err => {
                         __LOG__.debug("rejected a request: ", err);
@@ -421,17 +430,16 @@ pub class HttpServer {
      * ====================================================================================================
      */
 
-    fn onRequest(self, rqt: request::HttpRequest)-> response::HttpResponse {
-        if let Ok((method, sig)) = self._routes[rqt.url] {
-            if method & rqt.method != 0b000000000 {
-                sig(rqt)
-            }
-
-            else {
-                let dmut ret = response::HttpResponse(405);
-                ret.header.version = rqt.header.version;
-                ret
-            }
+    fn onRequest(self, ref mut rqt: request::HttpRequest)-> response::HttpResponse {
+        let parts = router::utils::splitPath(rqt.url.toStr());
+        if let Ok((route, params)) = self._router.find(parts, rqt.method) {
+            rqt:.setPathParameters(params);
+            route.handler(rqt)
+        } else if let Ok(allowed) = self._router.allowed(parts) {
+            let dmut ret = response::HttpResponse(405);
+            ret.header.version = rqt.header.version;
+            ret.header.unmanaged["Allow"] = utils::methodNames(allowed);
+            ret
         } else {
             if let Ok(on404) = self._on404 {
                 on404(rqt)
