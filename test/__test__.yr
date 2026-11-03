@@ -2,6 +2,7 @@ in __test__;
 
 mod .helpers;
 mod .errors;
+mod .loopback;
 
 mod .actor;
 mod .http;

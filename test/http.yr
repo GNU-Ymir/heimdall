@@ -1,3 +1,4 @@
 in http;
 
+mod ::request;
 mod ::server;
