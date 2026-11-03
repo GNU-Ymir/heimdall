@@ -71,7 +71,9 @@ The layout of the other non-midgard Ymir projects (`../bootstrap`, `../ymir-lsp`
   release, `[registry]` this repository.
 - `src/heimdall.yr`: the package root, declaring `heimdall::http` and `heimdall::actor`.
 - `src/heimdall/http*`: the HTTP server (`server`, `request`, `response`, `header`, `errors`),
-  formerly `std::net::http`.
+  formerly `std::net::http`, its route table (`router`, `router::{route,segment,utils}`) and the
+  `#[route]` tag binding a handler's parameters through `__pragma!parameter_infos`/`parameter_type`
+  (`routing`, `routing::utils`).
 - `src/heimdall/actor*`: the actor system (`base`, `errors`, `reference`, `request`, `sys`,
   `sys::{message,utils}`), formerly `std::concurrency::actor`.
 - `test/__test__.yr`: the test root, mirroring `src/` (`test/http/…`, `test/actor/…`).

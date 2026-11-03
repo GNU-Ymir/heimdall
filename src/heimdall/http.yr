@@ -14,6 +14,7 @@ mod ::header;
 mod ::errors;
 mod ::server;
 mod ::router;
+pub mod ::routing;
 
 
 pub def HttpRequestKind: header::HttpRequestKind;
@@ -81,3 +82,8 @@ pub def HttpResponseCode: response::HttpResponseCode;
  * */
 pub def HttpServer: server::HttpServer;
 
+/**
+ * Tag declaring a function as the handler of a route
+ * */
+pub def route = routing::route;
+pub def HttpError: errors::HttpError;
