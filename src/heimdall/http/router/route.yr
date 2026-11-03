@@ -1,0 +1,95 @@
+/**
+ * Module containing the routes of the router
+ * @authors: Emile Cadorel
+ * @license: GPLv3
+ */
+
+in route;
+
+use heimdall::http::router::segment;
+
+/**
+ * A route: the paths it matches, the methods it answers and the function answering them
+ */
+pub record Route {
+
+    // The pattern the route was declared with
+    pub let pattern: [c8];
+
+    pub let segments: [Segment];
+
+    // The methods the route answers, a mask of `HttpRequestKind`
+    pub let method: u32;
+
+    pub let handler: dg (request::HttpRequest)-> response::HttpResponse;
+
+    // The function a `#[route]` tag registered, empty for a route set at run time
+    pub let name: [c8];
+
+    pub self (pattern: [c8], method: u32, handler: dg (request::HttpRequest)-> response::HttpResponse, name: [c8] = "")
+        with pattern = pattern
+        , segments = Segment::parsePattern(pattern)
+        , method = method
+        , handler = handler
+        , name = name
+    {}
+
+    /**
+     * @returns: true if the routes match the same paths
+     * */
+    pub fn samePattern(self, other: Route)-> bool {
+        if self.segments.len != other.segments.len { return false; }
+        for i in 0us .. self.segments.len {
+            if !self.segments[i].sameAs(other.segments[i]) { return false; }
+        }
+
+        true
+    }
+
+    /**
+     * @returns: true if the routes match the same paths and share a method
+     * */
+    pub fn conflicts(self, other: Route)-> bool {
+        self.samePattern(other) && (self.method & other.method) != 0u32
+    }
+
+    /**
+     * Match the segments of a path against the pattern of the route
+     * @returns: the values of the parameters and the wildcard, if the path matches
+     * */
+    pub fn matches(self, parts: [[c8]])-> ([[c8] => [c8]])? {
+        let mut params: [[c8] => mut [c8]] = copy [];
+        for i in 0us .. self.segments.len {
+            let s = self.segments[i];
+            match s.kind {
+                SegmentKind::WILDCARD => {
+                    params[s.text] = utils::joinParts(parts[i .. $]);
+                    return (params)?;
+                }
+                SegmentKind::PARAM => {
+                    if i >= parts.len { return none; }
+                    params[s.text] = parts[i];
+                }
+                _ => {
+                    if i >= parts.len || parts[i] != s.text { return none; }
+                }
+            }
+        }
+
+        if parts.len != self.segments.len { return none; }
+        (params)?
+    }
+
+    /**
+     * @returns: true if the route is preferred to `other`, an exact segment winning over a parameter, a parameter over a wildcard
+     * */
+    pub fn precedes(self, other: Route)-> bool {
+        for i in 0us .. self.segments.len {
+            if i >= other.segments.len { return false; }
+            let (a, b) = (cast!u8(self.segments[i].kind), cast!u8(other.segments[i].kind));
+            if a != b { return a < b; }
+        }
+
+        self.segments.len < other.segments.len
+    }
+}

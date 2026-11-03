@@ -1,0 +1,70 @@
+/**
+ * Module containing the `#[route]` tag, declaring a function as the handler of a route
+ * @authors: Emile Cadorel
+ * @license: GPLv3
+ */
+
+in routing;
+
+pub mod ::utils;
+
+
+/**
+ * Register the tagged function as the handler of the route `path`, for the methods of the mask
+ * `method`, in the routes of the servers built for `group`.
+ *
+ * A `{name}` segment of `path` matches any segment, a last `{*name}` segment the rest of the path.
+ * Each parameter of the function receives the segment of its name, or else the query parameter of
+ * its name, converted to its type (`[c8]`, `bool` or a number), an `HttpRequest` parameter
+ * receiving the request. A missing or invalid value is answered with a 400 naming the parameter.
+ * The function returns an `HttpResponse`, or a `[c8]` answered as a 200 `text/plain`.
+ * @info: the methods of a mask are summed, gyc not evaluating `|` at compile time (YMI-277)
+ * @example:
+ * ```
+ * use std::fs;
+ *
+ * use heimdall::http;
+ *
+ * #[route ("/users/{id}")]
+ * fn getUser(id: u64, verbose: bool)-> [c8] {
+ *     if verbose { "user number " ~ std::conv::to!{[c8]} (id) } else { "user" }
+ * }
+ *
+ * #[route ("/files/{*path}", method-> HttpRequestKind::GET + HttpRequestKind::HEAD, group-> "files")]
+ * fn getFile(path: [c8], rqt: HttpRequest)-> HttpResponse {
+ *     HttpResponse(200u32, body-> path ~ " for " ~ rqt.header.userAgent)
+ * }
+ *
+ * fn main()
+ *     throws HttpError
+ * {
+ *     let dmut users = copy HttpServer(); // answers /users/{id}
+ *     let dmut files = copy HttpServer(group-> "files"); // answers /files/{*path}
+ *     users:.start();
+ *     files:.start();
+ *     users:.join();
+ *     files:.join();
+ * }
+ * ```
+ */
+pub tag route (path: [c8], method: u32 = header::HttpRequestKind::GET, group: [c8] = "") {
+
+    pub self {fn F} () {
+        cte for i in 0us .. path.len {
+            cte if (path[i] == '{') {
+                cte assert (utils::isBound!{F, utils::placeholder!{path, i}, 0us},
+                            "the route " ~ path ~ " of " ~ __pragma!function_infos (F).name ~ " binds {" ~ utils::placeholder!{path, i} ~ "}, but it has no parameter of that name");
+            }
+        }
+
+        cte for i in 0us .. __pragma!parameter_infos (F).len {
+            cte assert (utils::isBindable!{__pragma!parameter_type (F, i)},
+                        "the parameter " ~ __pragma!parameter_infos (F)[i].name ~ " of " ~ __pragma!function_infos (F).name ~ " is of type " ~ __pragma!parameter_type (F, i)::typeid ~ ", which cannot be bound to a request");
+        }
+
+        cte assert (utils::isAnswer!{__pragma!return_type (F)},
+                    __pragma!function_infos (F).name ~ " returns " ~ __pragma!return_type (F)::typeid ~ ", where a route returns an HttpResponse or a [c8]");
+
+        router::Router::register(group, router::route::Route(path, method, &utils::invoke!{F}, name-> __pragma!function_infos (F).name));
+    }
+}

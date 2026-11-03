@@ -1,0 +1,36 @@
+/**
+ * Module containing the path utilities of the router
+ * @authors: Emile Cadorel
+ * @license: GPLv3
+ */
+
+in utils;
+
+/**
+ * Split a path into its non empty segments
+ * */
+pub fn splitPath(path: [c8])-> [[c8]] {
+    let mut parts: [[c8]] = [];
+    let mut start = 0us;
+    for i in 0us .. path.len + 1us {
+        if i == path.len || path[i] == '/' {
+            if i > start { parts = parts ~ [path[start .. i]]; }
+            start = i + 1us;
+        }
+    }
+
+    parts
+}
+
+/**
+ * Join path segments with `/`
+ * */
+pub fn joinParts(parts: [[c8]])-> [c8] {
+    let mut res = "";
+    for i, p in parts {
+        if i != 0us { res = res ~ "/"; }
+        res = res ~ p;
+    }
+
+    res
+}
