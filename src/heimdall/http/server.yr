@@ -264,6 +264,10 @@ pub class HttpServer {
     fn dispose(mut self) {
         self:.kill();
         self:.waitAllCompletes();
+        if let Ok(l) = self._listener {
+            etc::c::files::close(l.getHandle());
+        }
+
         self._listener = none;
 
         if self._epoll_fd != 0 {
