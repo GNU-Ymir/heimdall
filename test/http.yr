@@ -3,3 +3,4 @@ in http;
 mod ::request;
 mod ::response;
 mod ::server;
+mod ::routing;
