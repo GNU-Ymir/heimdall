@@ -41,6 +41,12 @@ nothing else: a title without a valid tag is left out of both, silently.
 
 ## Policy
 
+Code layout:
+- one class (or record) per file
+- free functions go in a `utils` submodule, or in the `@companion` module of the class/record they
+  belong to (`pub mod X` next to `X`, its functions `pub` to be reached from `X` or another module;
+  tags and enums have none)
+
 Concise comments:
 - only describe what the functions do, not what the current work is adding
 - don't write comments inside code unless absolutely necessary for understanding
