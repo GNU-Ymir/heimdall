@@ -8,10 +8,10 @@ name = "heimdall"
 package-root = "heimdall"
 
 [compiler]
-version = "1.12.0"
+version = "1.14.1"
 
 [std]
-version = "3.0.0"
+version = "4.0.0"
 url = "https://github.com/GNU-Ymir/yruntime.git"
 
 [dependencies]
