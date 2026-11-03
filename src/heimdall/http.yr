@@ -13,6 +13,7 @@ mod ::response;
 mod ::header;
 mod ::errors;
 mod ::server;
+mod ::router;
 
 
 pub def HttpRequestKind: header::HttpRequestKind;
@@ -79,4 +80,4 @@ pub def HttpResponseCode: response::HttpResponseCode;
  * ```
  * */
 pub def HttpServer: server::HttpServer;
-pub def HttpError: errors::HttpError;
+

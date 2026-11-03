@@ -1,0 +1,69 @@
+/**
+ * Module containing the segments of a route pattern
+ * @authors: Emile Cadorel
+ * @license: GPLv3
+ */
+
+in segment;
+
+use heimdall::http::router::utils;
+
+/**
+ * The kind of a segment of a route pattern, a match preferring the lowest
+ */
+pub enum SegmentKind : u8
+| EXACT    = 0u8
+| PARAM    = 1u8
+| WILDCARD = 2u8;
+
+/**
+ * A segment of a route pattern: a literal, a `{name}` parameter, or a trailing `{*name}` wildcard
+ */
+pub record Segment {
+
+    pub let kind: SegmentKind;
+
+    // The literal of an exact segment, the name of a parameter or a wildcard
+    pub let text: [c8];
+
+    pub self (kind: SegmentKind, text: [c8])
+        with kind = kind
+        , text = text
+    {}
+
+    /**
+     * @returns: true if the segments match the same paths, whatever the names of their parameters
+     * */
+    pub fn sameAs(self, other: Segment)-> bool {
+        if self.kind != other.kind { return false; }
+        self.kind != SegmentKind::EXACT || self.text == other.text
+    }
+}
+
+@companion
+pub mod Segment {
+
+    /**
+     * Parse a route pattern, a segment `{name}` being a parameter and a last segment `{*name}` a wildcard
+     * */
+    pub fn parsePattern(pattern: [c8])-> [Segment] {
+        let parts = splitPath(pattern);
+        let mut segments: [Segment] = [];
+        for i in 0us .. parts.len {
+            let p = parts[i];
+            if p.len > 2us && p[0] == '{' && p[$ - 1us] == '}' {
+                if p[1] == '*' && i == parts.len - 1us && p.len > 3us {
+                    segments = segments ~ [Segment(SegmentKind::WILDCARD, p[2us .. $ - 1us])];
+                } else if p[1] != '*' {
+                    segments = segments ~ [Segment(SegmentKind::PARAM, p[1us .. $ - 1us])];
+                } else {
+                    segments = segments ~ [Segment(SegmentKind::EXACT, p)];
+                }
+            } else {
+                segments = segments ~ [Segment(SegmentKind::EXACT, p)];
+            }
+        }
+
+        segments
+    }
+}

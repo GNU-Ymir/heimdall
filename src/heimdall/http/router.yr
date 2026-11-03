@@ -1,0 +1,134 @@
+/**
+ * Module containing the route table an http server dispatches on
+ * @authors: Emile Cadorel
+ * @license: GPLv3
+ */
+
+in router;
+
+pub mod ::segment;
+pub mod ::route;
+pub mod ::utils;
+
+use heimdall::http::router::route;
+
+/**
+ * The routes of an http server
+ */
+pub class Router {
+
+    let mut _routes: [Route] = [];
+
+    pub self () {}
+
+    /**
+     * Add a route, unless one matching the same paths already answers one of its methods
+     * @returns: the route it conflicts with
+     * */
+    pub fn add(mut self, route: Route)-> (Route)? {
+        for r in self._routes {
+            if r.conflicts(route) { return (r)?; }
+        }
+
+        self._routes = self._routes ~ [route];
+        none
+    }
+
+    /**
+     * Add a route, replacing every route matching the same paths
+     * */
+    pub fn set(mut self, route: Route) {
+        self:.remove(route.pattern);
+        self._routes = self._routes ~ [route];
+    }
+
+    /**
+     * Remove every route matching the same paths as `pattern`
+     * */
+    pub fn remove(mut self, pattern: [c8]) {
+        let removed = Route(pattern, 0u32, &Router::noHandler);
+        let mut kept: [Route] = [];
+        for r in self._routes {
+            if !r.samePattern(removed) { kept = kept ~ [r]; }
+        }
+
+        self._routes = kept;
+    }
+
+    /**
+     * @returns: the preferred route matching `parts` and answering `method`, with the values of its parameters
+     * */
+    pub fn find(self, parts: [[c8]], method: u32)-> (Route, [[c8] => [c8]])? {
+        let mut best: (Route, [[c8] => [c8]])? = none;
+        for r in self._routes {
+            if (r.method & method) == 0u32 { continue; }
+            if let Ok(params) = r.matches(parts) {
+                if let Ok((b, _)) = best && !r.precedes(b) { continue; }
+                best = ((r, params))?;
+            }
+        }
+
+        best
+    }
+
+    /**
+     * @returns: the methods the routes matching `parts` answer, none if no route matches them
+     * */
+    pub fn allowed(self, parts: [[c8]])-> (u32)? {
+        let mut found = false, mut mask = 0u32;
+        for r in self._routes {
+            if let Ok(_) = r.matches(parts) {
+                found = true;
+                mask = mask | r.method;
+            }
+        }
+
+        if found { (mask)? } else { none }
+    }
+
+    /**
+     * @returns: the routes, in the order they were added
+     * */
+    @field
+    pub fn routes(self)-> [Route] {
+        self._routes
+    }
+}
+
+@companion
+pub mod Router {
+
+    lazy mut __TAGGED_ROUTES__: [([c8], Route)] = [];
+
+    /**
+     * Register a route declared by a `#[route]` tag in `group`, ending the program if it conflicts with another one
+     * */
+    pub fn register(group: [c8], route: Route) {
+        for e in __TAGGED_ROUTES__ {
+            let (g, r) = e;
+            if g == group && r.conflicts(route) {
+                std::io::eprintln("the route ", route.pattern, " of ", route.name, " conflicts with the route ", r.pattern, " of ", r.name);
+                panic;
+            }
+        }
+
+        __TAGGED_ROUTES__ = __TAGGED_ROUTES__ ~ [(group, route)];
+    }
+
+    /**
+     * @returns: the routes `#[route]` tags declared in `group`
+     * */
+    pub fn tagged(group: [c8])-> [Route] {
+        let mut routes: [Route] = [];
+        for e in __TAGGED_ROUTES__ {
+            let (g, r) = e;
+            if g == group { routes = routes ~ [r]; }
+        }
+
+        routes
+    }
+
+    pub fn noHandler(_: request::HttpRequest)-> response::HttpResponse {
+        response::HttpResponse(404u32)
+    }
+}
