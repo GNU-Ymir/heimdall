@@ -3,6 +3,7 @@ in http;
 use std::algorithm::searching;
 use std::fs;
 use std::io;
+use std::log;
 use std::net;
 use std::net::tcp;
 use std::stream;
@@ -34,13 +35,13 @@ fn onParam(rqt: HttpRequest)-> HttpResponse {
  * @info: `TcpListener` reports the address it was built with, never the one the kernel picked,
  *        so a port cannot be left to the kernel and has to be searched for instead
  * */
-fn startOnLoopback()-> dmut &HttpServer
+fn startOnLoopback(nbThreads: u32 = 2u32)-> dmut &HttpServer
     throws HttpError
 {
     let mut last: (&HttpError)? = none;
     for i in 0u16 .. 32u16 {
         {
-            let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 35180u16 + i), nbThreads-> 2u32);
+            let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 35180u16 + i), nbThreads-> nbThreads);
             server:.route(Path("/hello"), &onHello);
             server:.route(Path("/echo"), &onEcho, method-> HttpRequestKind::POST);
             server:.route(Path("/param"), &onParam);
@@ -173,4 +174,39 @@ __test bodyTooLarge { // refused from its Content-Length, before any of the body
     } catch {
         err => { println(err); assert(false, "threw"); }
     }
+}
+
+__test closedConnectionIsNoWarning {
+    // A client closing its connection before the response is sent (a browser opening one ahead of
+    // time and closing it unused) is worth a debug record, not a warning with a stack trace
+    let dmut logs = copy StringStream();
+    let dmut sink: &LogSink = copy StringSink(alias logs);
+    setLevel("heimdall::http::server", Level::DEBUG);
+    addSink(alias sink);
+
+    let response = {
+        // a single worker answers the connections in the order they came: once the second one is
+        // answered, the first was handled
+        let dmut server = startOnLoopback(nbThreads-> 1u32);
+        {
+            let dmut client = TcpStream::connect(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), server.port));
+            client:.dispose();
+        } catch {
+            _ => {}
+        }
+
+        let r = exchange(server.port, "GET /hello HTTP/1.1\r\n\r\n");
+        server:.kill();
+        server:.join();
+        r
+    } catch {
+        err => { println(err); "" }
+    };
+
+    removeSink(sink);
+    setLevel("heimdall::http::server", Level::INFO);
+
+    assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "the next connection should still be answered");
+    assert(contains(logs[], "client closed the connection before the response was sent"), "the closed connection should be logged at debug");
+    assert(!contains(logs[], "failed to send a response"), "a closed connection is not a warning");
 }
