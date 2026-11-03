@@ -8,11 +8,11 @@ use std::log;
 use std::net;
 use std::net::tcp;
 use std::stream;
-use std::time;
 
 use heimdall::http;
 
 use helpers;
+use loopback;
 
 fn onHello(_: HttpRequest)-> HttpResponse {
     HttpResponse(200u32, body-> "hello")
@@ -58,32 +58,6 @@ fn startOnLoopback(routes: fn (dmut &HttpServer)-> void = &defaultRoutes, nbThre
     server:.start();
 
     alias server
-}
-
-/**
- * @returns: everything the server at `port` answers to `raw`, read until it closes the connection
- * */
-fn exchange(port: u16, raw: [c8])-> [c8] {
-    let dmut response = copy StringStream();
-    {
-        let dmut client = TcpStream::connect(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), port));
-        client:.setRecvTimeout(seconds(5u64));
-        client:.sendRaw(raw);
-
-        {
-            loop {
-                response:.write(client:.receive!{c8} ());
-            }
-        } catch {
-            _ => {}
-        }
-
-        client:.dispose();
-    } catch {
-        _ => {}
-    }
-
-    response[]
 }
 
 /**
