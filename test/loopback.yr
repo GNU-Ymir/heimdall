@@ -1,0 +1,119 @@
+in loopback;
+
+use etc::c::files;
+
+use std::net;
+use std::net::tcp;
+use std::stream;
+use std::time;
+
+use heimdall::http;
+
+/**
+ * @returns: a listener on a port of the loopback picked by the kernel
+ * */
+fn listen()-> dmut &TcpListener
+    throws TcpError
+{
+    copy TcpListener(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 0u16))
+}
+
+/**
+ * Accept one connection on `listener`, then close it
+ * @info: `TcpListener` has no `dispose`, its socket would stay open until the end of the process
+ * */
+fn acceptOnce(dmut listener: &TcpListener)-> dmut &TcpStream
+    throws TcpError
+{
+    let dmut accepted = {
+        listener:.accept()
+    } catch {
+        err: &TcpError => {
+            files::close(listener.getHandle());
+            throw err;
+        }
+    };
+
+    files::close(listener.getHandle());
+
+    alias accepted
+}
+
+/**
+ * @returns: the request `HttpRequest` reads from a client sending `raw` then closing its side
+ * */
+pub fn parse(raw: [c8])-> HttpRequest
+    throws HttpError, TcpError
+{
+    let dmut listener = listen();
+    let dmut client = TcpStream::connect(listener.addr);
+    let dmut accepted = acceptOnce(alias listener);
+
+    client:.sendRaw(raw);
+    client:.dispose();
+
+    accepted:.setRecvTimeout(seconds(5u64));
+    let rqt = {
+        HttpRequest(alias accepted)
+    } catch {
+        err: &HttpError => {
+            accepted:.dispose();
+            throw err;
+        }
+    };
+
+    accepted:.dispose();
+
+    rqt
+}
+
+/**
+ * @returns: the code of the `HttpError` refusing `raw`, 0 if `raw` is parsed or refused otherwise
+ * */
+pub fn refusal(raw: [c8])-> u32 {
+    {
+        parse(raw);
+    } catch {
+        err: &HttpError => { return err.code; }
+        _ => { return 0u32; }
+    }
+
+    0u32
+}
+
+/**
+ * @returns: everything `resp.send` writes, read by the client until the connection is closed
+ * */
+pub fn sent(resp: HttpResponse)-> [c8]
+    throws TcpError
+{
+    let dmut listener = listen();
+    let dmut client = TcpStream::connect(listener.addr);
+    let dmut accepted = acceptOnce(alias listener);
+
+    {
+        resp.send(alias accepted);
+    } catch {
+        err: &TcpError => {
+            accepted:.dispose();
+            client:.dispose();
+            throw err;
+        }
+    }
+
+    accepted:.dispose();
+
+    let dmut out = copy StringStream();
+    client:.setRecvTimeout(seconds(5u64));
+    {
+        loop {
+            out:.write(client:.receive!{c8} ());
+        }
+    } catch {
+        _ => {}
+    }
+
+    client:.dispose();
+
+    out[]
+}

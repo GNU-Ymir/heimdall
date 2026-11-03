@@ -1,0 +1,374 @@
+in server;
+
+use std::algorithm::searching;
+use std::conv;
+use std::fs;
+use std::io;
+use std::log;
+use std::net;
+use std::net::tcp;
+use std::stream;
+use std::time;
+
+use heimdall::http;
+
+use helpers;
+
+fn onHello(_: HttpRequest)-> HttpResponse {
+    HttpResponse(200u32, body-> "hello")
+}
+
+fn onEcho(rqt: HttpRequest)-> HttpResponse {
+    HttpResponse(200u32, body-> rqt.body)
+}
+
+fn onParam(rqt: HttpRequest)-> HttpResponse {
+    if let Ok(v) = rqt.parameters["name"] {
+        HttpResponse(200u32, body-> v)
+    } else {
+        HttpResponse(400u32)
+    }
+}
+
+fn onTeapot(_: HttpRequest)-> HttpResponse {
+    HttpResponse(418u32, body-> "short and stout")
+}
+
+fn onMissing(rqt: HttpRequest)-> HttpResponse {
+    HttpResponse(404u32, body-> "nothing at " ~ rqt.url.toStr())
+}
+
+/**
+ * Answer `/hello`, `/echo` (POST) and `/param`
+ * */
+fn defaultRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/hello"), &onHello);
+    server:.route(Path("/echo"), &onEcho, method-> HttpRequestKind::POST);
+    server:.route(Path("/param"), &onParam);
+}
+
+/**
+ * Start a server whose routes are set by `routes`, on a port of the loopback picked by the kernel
+ * */
+fn startOnLoopback(routes: fn (dmut &HttpServer)-> void = &defaultRoutes, nbThreads: u32 = 2u32)-> dmut &HttpServer
+    throws HttpError
+{
+    let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 0u16), nbThreads-> nbThreads);
+    routes(alias server);
+    server:.start();
+
+    alias server
+}
+
+/**
+ * @returns: everything the server at `port` answers to `raw`, read until it closes the connection
+ * */
+fn exchange(port: u16, raw: [c8])-> [c8] {
+    let dmut response = copy StringStream();
+    {
+        let dmut client = TcpStream::connect(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), port));
+        client:.setRecvTimeout(seconds(5u64));
+        client:.sendRaw(raw);
+
+        {
+            loop {
+                response:.write(client:.receive!{c8} ());
+            }
+        } catch {
+            _ => {}
+        }
+
+        client:.dispose();
+    } catch {
+        _ => {}
+    }
+
+    response[]
+}
+
+/**
+ * @returns: the answer of a fresh server to `raw`, the server being stopped before returning
+ * */
+fn roundTrip(raw: [c8], routes: fn (dmut &HttpServer)-> void = &defaultRoutes)-> [c8]
+    throws HttpError
+{
+    let dmut server = startOnLoopback(routes-> routes);
+    let response = exchange(server.port, raw);
+
+    server:.kill();
+    server:.join();
+
+    response
+}
+
+__test answersARoute {
+    {
+        let response = roundTrip("GET /hello HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(contains(response, "Content-Length: 5\r\n"), "b");
+        assert(contains(response, "Connection: close\r\n"), "c");
+        assert(contains(response, "\r\n\r\nhello"), "d");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test echoesTheBody {
+    {
+        let response = roundTrip("POST /echo HTTP/1.1\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nheimdall's body");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(contains(response, "\r\n\r\nheimdall's body"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test readsParameters {
+    {
+        let response = roundTrip("GET /param?flag&name=heimdall HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(contains(response, "\r\n\r\nheimdall"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test notFound {
+    {
+        let response = roundTrip("GET /missing HTTP/1.0\r\n\r\n");
+        assert(response.startsWith("HTTP/1.0 404 Not Found\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test methodNotAllowed {
+    {
+        let response = roundTrip("DELETE /hello HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 405 Method Not Allowed\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test malformedRequestLine {
+    {
+        let response = roundTrip("garbage\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 400 Bad Request\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test unknownMethod {
+    {
+        let response = roundTrip("BREW /hello HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 400 Bad Request\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test bodyTooLarge { // refused from its Content-Length, before any of the body is read
+    {
+        let response = roundTrip("POST /echo HTTP/1.1\r\nContent-Length: 200000000\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 413 Request Entity Too Large\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test closedConnectionIsNoWarning {
+    // A client closing its connection before the response is sent (a browser opening one ahead of
+    // time and closing it unused) is worth a debug record, not a warning with a stack trace
+    let dmut logs = copy StringStream();
+    let dmut sink: &LogSink = copy StringSink(alias logs);
+    setLevel("heimdall::http::server", Level::DEBUG);
+    addSink(alias sink);
+
+    let response = {
+        // a single worker answers the connections in the order they came: once the second one is
+        // answered, the first was handled
+        let dmut server = startOnLoopback(nbThreads-> 1u32);
+        {
+            let dmut client = TcpStream::connect(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), server.port));
+            client:.dispose();
+        } catch {
+            _ => {}
+        }
+
+        let r = exchange(server.port, "GET /hello HTTP/1.1\r\n\r\n");
+        server:.kill();
+        server:.join();
+        r
+    } catch {
+        err => { println(err); "" }
+    };
+
+    removeSink(sink);
+    setLevel("heimdall::http::server", Level::INFO);
+
+    assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "the next connection should still be answered");
+    assert(contains(logs[], "client closed the connection before the response was sent"), "the closed connection should be logged at debug");
+    assert(!contains(logs[], "failed to send a response"), "a closed connection is not a warning");
+}
+
+fn methodRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/read"), &onHello);
+    server:.route(Path("/write"), &onHello, method-> HttpRequestKind::POST | HttpRequestKind::PUT);
+    server:.route(Path("/any"), &onHello, method-> HttpRequestKind::ANY);
+    server:.route(Path("/none"), &onHello, method-> HttpRequestKind::NONE);
+}
+
+__test routesByMethod {
+    {
+        assert(roundTrip("GET /read HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(roundTrip("POST /read HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 405 "), "b");
+
+        assert(roundTrip("POST /write HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "c");
+        assert(roundTrip("PUT /write HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "d");
+        assert(roundTrip("GET /write HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 405 "), "e");
+
+        assert(roundTrip("PATCH /any HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "f");
+        assert(roundTrip("GET /none HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 405 "), "g");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test refusalsKeepTheRequestVersion {
+    {
+        assert(roundTrip("GET /missing HTTP/1.0\r\n\r\n").startsWith("HTTP/1.0 404 Not Found\r\n"), "a");
+        assert(roundTrip("DELETE /hello HTTP/1.0\r\n\r\n").startsWith("HTTP/1.0 405 Method Not Allowed\r\n"), "b");
+        assert(roundTrip("GET /hello HTTP/1.0\r\n\r\n").startsWith("HTTP/1.1 200 OK\r\n"), "c"); // a handler's response sets its own version
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test parametersDoNotChangeTheRoute {
+    {
+        let response = roundTrip("GET /hello?name=x HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(response.endsWith("\r\n\r\nhello"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test handlerCodeAndBody {
+    {
+        let response = roundTrip("GET /teapot HTTP/1.1\r\n\r\n", routes-> &teapotRoutes);
+        assert(response.startsWith("HTTP/1.1 418 I'm a teapot\r\n"), "a");
+        assert(response.endsWith("\r\n\r\nshort and stout"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+fn teapotRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/teapot"), &onTeapot);
+}
+
+fn replacedRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/hello"), &onHello);
+    server:.route(Path("/hello"), &onTeapot, method-> HttpRequestKind::POST);
+}
+
+__test aRouteReplacesThePreviousOne {
+    {
+        assert(roundTrip("POST /hello HTTP/1.1\r\n\r\n", routes-> &replacedRoutes).startsWith("HTTP/1.1 418 "), "a");
+        assert(roundTrip("GET /hello HTTP/1.1\r\n\r\n", routes-> &replacedRoutes).startsWith("HTTP/1.1 405 "), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+fn deletedRoutes(dmut server: &HttpServer) {
+    defaultRoutes(alias server);
+    server:.del(Path("/hello"));
+    server:.del(Path("/never-routed"));
+}
+
+__test deletedRoute {
+    {
+        assert(roundTrip("GET /hello HTTP/1.1\r\n\r\n", routes-> &deletedRoutes).startsWith("HTTP/1.1 404 "), "a");
+        assert(roundTrip("GET /param?name=x HTTP/1.1\r\n\r\n", routes-> &deletedRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+fn custom404Routes(dmut server: &HttpServer) {
+    defaultRoutes(alias server);
+    server:.setOn404(&onMissing);
+}
+
+fn reset404Routes(dmut server: &HttpServer) {
+    custom404Routes(alias server);
+    server:.delOn404();
+}
+
+__test custom404 {
+    {
+        let custom = roundTrip("GET /nowhere HTTP/1.1\r\n\r\n", routes-> &custom404Routes);
+        assert(custom.startsWith("HTTP/1.1 404 Not Found\r\n"), "a");
+        assert(custom.endsWith("\r\n\r\nnothing at /nowhere"), "b");
+
+        let routed = roundTrip("GET /hello HTTP/1.1\r\n\r\n", routes-> &custom404Routes);
+        assert(routed.endsWith("\r\n\r\nhello"), "c"); // a route outranks the 404 handler
+
+        let wrongMethod = roundTrip("DELETE /hello HTTP/1.1\r\n\r\n", routes-> &custom404Routes);
+        assert(wrongMethod.startsWith("HTTP/1.1 405 "), "d"); // the 404 handler is not called on a 405
+
+        let reset = roundTrip("GET /nowhere HTTP/1.1\r\n\r\n", routes-> &reset404Routes);
+        assert(reset.startsWith("HTTP/1.1 404 Not Found\r\n"), "e");
+        assert(reset.endsWith("\r\n\r\n"), "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test servesSeveralRequests {
+    {
+        let dmut server = startOnLoopback();
+        for i in 0 .. 8 {
+            let response = exchange(server.port, "GET /param?name=n" ~ i.to!{[c8]} () ~ " HTTP/1.1\r\n\r\n");
+            assert(response.endsWith("\r\n\r\nn" ~ i.to!{[c8]} ()), "a");
+        }
+
+        server:.kill();
+        server:.join();
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test refusalsAreAnswered { // a request refused while being read is answered in HTTP/1.1, with its code
+    {
+        assert(roundTrip("GET /hello HTTP/1.1\r\nContent-Length: x\r\n\r\n").startsWith("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n"), "a");
+        assert(roundTrip("GET /hello HTTP/1.0\r\nHost: 127.0.0.1:x\r\n\r\n").startsWith("HTTP/1.1 400 Bad Request\r\n"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test releasesItsPort { // a stopped server closes its listener, another one can bind the same port
+    {
+        let dmut first = startOnLoopback();
+        let port = first.port;
+        first:.kill();
+        first:.join();
+
+        let dmut second = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), port), nbThreads-> 2u32);
+        defaultRoutes(alias second);
+        second:.start();
+
+        assert(exchange(port, "GET /hello HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 200 OK\r\n"), "a");
+
+        second:.kill();
+        second:.join();
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}

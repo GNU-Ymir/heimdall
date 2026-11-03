@@ -1,0 +1,249 @@
+in request;
+
+use std::fs;
+use std::io;
+use std::net;
+
+use heimdall::http;
+
+use loopback;
+
+/**
+ * @returns: the value of `key` in `dict`, or `"<missing>"`
+ * */
+fn get {T} (dict: T, key: [c8])-> [c8] {
+    if let Ok(v) = dict[key] { v } else { "<missing>" }
+}
+
+__test requestLine {
+    {
+        let rqt = parse("GET /a/b HTTP/1.1\r\n\r\n");
+        assert(rqt.method == HttpRequestKind::GET, "a");
+        assert(rqt.url == Path("/a/b"), "b");
+        assert(rqt.header.version == HttpVersion::V1_1, "c");
+        assert(rqt.parameters.len == 0us, "d");
+        assert(rqt.body == "", "e");
+        assert(rqt.header.contentLength == 0u32, "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test methods {
+    {
+        assert(parse("POST / HTTP/1.1\r\n\r\n").method == HttpRequestKind::POST, "a");
+        assert(parse("GET / HTTP/1.1\r\n\r\n").method == HttpRequestKind::GET, "b");
+        assert(parse("HEAD / HTTP/1.1\r\n\r\n").method == HttpRequestKind::HEAD, "c");
+        assert(parse("OPTIONS / HTTP/1.1\r\n\r\n").method == HttpRequestKind::OPTIONS, "d");
+        assert(parse("CONNECT / HTTP/1.1\r\n\r\n").method == HttpRequestKind::CONNECT, "e");
+        assert(parse("TRACE / HTTP/1.1\r\n\r\n").method == HttpRequestKind::TRACE, "f");
+        assert(parse("PUT / HTTP/1.1\r\n\r\n").method == HttpRequestKind::PUT, "g");
+        assert(parse("PATCH / HTTP/1.1\r\n\r\n").method == HttpRequestKind::PATCH, "h");
+        assert(parse("DELETE / HTTP/1.1\r\n\r\n").method == HttpRequestKind::DELETE, "i");
+        assert(parse("delete / HTTP/1.1\r\n\r\n").method == HttpRequestKind::DELETE, "j");
+        assert(parse("Patch / HTTP/1.1\r\n\r\n").method == HttpRequestKind::PATCH, "k");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test versions {
+    {
+        assert(parse("GET / HTTP/0.9\r\n\r\n").header.version == HttpVersion::V0_9, "a");
+        assert(parse("GET / HTTP/1.0\r\n\r\n").header.version == HttpVersion::V1_0, "b");
+        assert(parse("GET / HTTP/1.1\r\n\r\n").header.version == HttpVersion::V1_1, "c");
+        assert(parse("GET / HTTP/2\r\n\r\n").header.version == HttpVersion::V2_0, "d");
+        assert(parse("GET / HTTP/3\r\n\r\n").header.version == HttpVersion::V3_0, "e");
+        assert(parse("GET / HTTP/4.2\r\n\r\n").header.version == HttpVersion::UNSPECIFIED, "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test malformedRequestLines {
+    assert(refusal("BREW / HTTP/1.1\r\n\r\n") == 400u32, "a");
+    assert(refusal("GET\r\n\r\n") == 400u32, "b");
+    assert(refusal("GET /\r\n\r\n") == 400u32, "c");
+    assert(refusal("GET / FTP/1.1\r\n\r\n") == 400u32, "d");
+    assert(refusal("GET / HTTP1.1\r\n\r\n") == 400u32, "e");
+    assert(refusal("GET /a b HTTP/1.1\r\n\r\n") == 400u32, "f");
+    assert(refusal(" / HTTP/1.1\r\n\r\n") == 400u32, "g");
+    assert(refusal("\r\n\r\n") == 400u32, "h");
+}
+
+__test truncatedRequests { // the client closes its side before the request is complete
+    assert(refusal("") == 400u32, "a");
+    assert(refusal("GET / HT") == 400u32, "b");
+    assert(refusal("GET / HTTP/1.1\r\n") == 400u32, "c");
+    assert(refusal("GET / HTTP/1.1\r\nAccept: text/html") == 400u32, "d");
+}
+
+__test parameters {
+    {
+        let rqt = parse("GET /search?a=1&b=&c&d=x=y&&e=last HTTP/1.1\r\n\r\n");
+        assert(rqt.url == Path("/search"), "a");
+        assert(rqt.parameters.len == 5us, "b");
+        assert(get(rqt.parameters, "a") == "1", "c");
+        assert(get(rqt.parameters, "b") == "", "d");
+        assert(get(rqt.parameters, "c") == "", "e");
+        assert(get(rqt.parameters, "d") == "x=y", "f");
+        assert(get(rqt.parameters, "e") == "last", "g");
+
+        let empty = parse("GET /search? HTTP/1.1\r\n\r\n");
+        assert(empty.url == Path("/search"), "h");
+        assert(empty.parameters.len == 0us, "i");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test managedHeaders {
+    {
+        let rqt = parse("GET / HTTP/1.1\r\n"
+                        ~ "Accept: text/html\r\n"
+                        ~ "Accept-Charset: utf-8\r\n"
+                        ~ "Accept-Encoding: gzip, deflate\r\n"
+                        ~ "Accept-Language: fr-FR, en;q=0.5\r\n"
+                        ~ "Content-Type: application/json\r\n"
+                        ~ "Origin: http://127.0.0.1:8080\r\n"
+                        ~ "Priority: u=1\r\n"
+                        ~ "User-Agent: heimdall-test/1.0\r\n"
+                        ~ "\r\n");
+
+        assert(rqt.header.accept == "text/html", "a");
+        assert(rqt.header.acceptCharset == "utf-8", "b");
+        assert(rqt.header.acceptEncoding == "gzip, deflate", "c");
+        assert(rqt.header.acceptLanguage == "fr-FR, en;q=0.5", "d");
+        assert(rqt.header.contentType == "application/json", "e");
+        assert(rqt.header.origin == "http://127.0.0.1:8080", "f");
+        assert(rqt.header.priority == "u=1", "g");
+        assert(rqt.header.userAgent == "heimdall-test/1.0", "h");
+        assert(rqt.header.unmanaged.len == 0us, "i");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test headerDefaults {
+    {
+        let rqt = parse("GET / HTTP/1.1\r\n\r\n");
+        assert(rqt.header.accept == "*/*", "a");
+        assert(rqt.header.contentType == "", "b");
+        assert(rqt.header.userAgent == "", "c");
+        assert(rqt.header.unmanaged.len == 0us, "d");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test headerNamesIgnoreCase {
+    {
+        let rqt = parse("GET / HTTP/1.1\r\nCONTENT-TYPE: text/csv\r\nuser-agent: lower\r\nX-Custom-Header: kept\r\n\r\n");
+        assert(rqt.header.contentType == "text/csv", "a");
+        assert(rqt.header.userAgent == "lower", "b");
+        assert(get(rqt.header.unmanaged, "x-custom-header") == "kept", "c");
+        assert(get(rqt.header.unmanaged, "X-Custom-Header") == "<missing>", "d");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test headerValuesAreTrimmed {
+    {
+        let rqt = parse("GET / HTTP/1.1\r\nContent-Type:   text/html  \r\nUser-Agent:\tagent\t\r\nX-None:\r\nX-Blank:    \r\nX-One: 1\r\nX-Tight:v\r\n\r\n");
+        assert(rqt.header.contentType == "text/html", "a");
+        assert(rqt.header.userAgent == "agent", "b");
+        assert(get(rqt.header.unmanaged, "x-none") == "", "c");
+        assert(get(rqt.header.unmanaged, "x-blank") == "", "d");
+        assert(get(rqt.header.unmanaged, "x-one") == "1", "e");
+        assert(get(rqt.header.unmanaged, "x-tight") == "v", "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test headerLinesWithoutColonAreIgnored {
+    {
+        let rqt = parse("GET / HTTP/1.1\r\nnot a header\r\nAccept: text/plain\r\n\r\n");
+        assert(rqt.header.accept == "text/plain", "a");
+        assert(rqt.header.unmanaged.len == 0us, "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test host {
+    {
+        let rqt = parse("GET / HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n");
+        assert(rqt.header.host == SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 8080u16), "a");
+
+        let noPort = parse("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert(noPort.header.host == SockAddr(Ipv4::UNSPECIFIED, 0u16), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+
+    assert(refusal("GET / HTTP/1.1\r\nHost: 127.0.0.1:http\r\n\r\n") == 400u32, "c");
+    assert(refusal("GET / HTTP/1.1\r\nHost: 127.0.0.1:70000\r\n\r\n") == 400u32, "d");
+}
+
+__test body {
+    {
+        let rqt = parse("POST / HTTP/1.1\r\nContent-Length: 15\r\n\r\nheimdall's body");
+        assert(rqt.header.contentLength == 15u32, "a");
+        assert(rqt.body == "heimdall's body", "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test shortBody { // HTTPS-2: a Content-Length of a single digit was trimmed to nothing, and refused
+    {
+        let rqt = parse("POST / HTTP/1.1\r\nContent-Length: 8\r\n\r\n12345678");
+        assert(rqt.header.contentLength == 8u32, "a");
+        assert(rqt.body == "12345678", "b");
+
+        let one = parse("POST / HTTP/1.1\r\nContent-Length: 1\r\n\r\nx");
+        assert(one.body == "x", "c");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test bodyIsReadUpToContentLength {
+    {
+        let longer = parse("POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nbodyand more");
+        assert(longer.body == "body", "a");
+
+        let without = parse("POST / HTTP/1.1\r\n\r\nignored");
+        assert(without.body == "", "b");
+
+        let zero = parse("POST / HTTP/1.1\r\nContent-Length: 0\r\n\r\nignored");
+        assert(zero.body == "", "c");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test invalidContentLength {
+    assert(refusal("POST / HTTP/1.1\r\nContent-Length: ten\r\n\r\n") == 400u32, "a");
+    assert(refusal("POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n") == 400u32, "b");
+    assert(refusal("POST / HTTP/1.1\r\nContent-Length:\r\n\r\n") == 400u32, "c");
+    assert(refusal("POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nshort") == 400u32, "d");
+    assert(refusal("POST / HTTP/1.1\r\nContent-Length: 200000000\r\n\r\n") == 413u32, "e");
+}
+
+__test longLines { // lines are read into a 255 bytes buffer, grown past it, and refused past 2KB
+    {
+        let value = copy ['a' ; 1000us];
+        let rqt = parse("GET / HTTP/1.1\r\nUser-Agent: " ~ value ~ "\r\nAccept: after\r\n\r\n");
+        assert(rqt.header.userAgent == value, "a");
+        assert(rqt.header.accept == "after", "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+
+    let tooLong = copy ['a' ; 3000us];
+    assert(refusal("GET / HTTP/1.1\r\nUser-Agent: " ~ tooLong ~ "\r\n\r\n") == 400u32, "c");
+    assert(refusal("GET /" ~ tooLong ~ " HTTP/1.1\r\n\r\n") == 400u32, "d");
+}

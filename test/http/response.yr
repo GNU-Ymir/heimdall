@@ -1,0 +1,111 @@
+in response;
+
+use std::algorithm::searching;
+use std::conv;
+use std::io;
+
+use heimdall::http;
+
+use helpers;
+use loopback;
+
+__test fullResponse {
+    {
+        let response = sent(HttpResponse(200u32, body-> "hello"));
+        assert(response == "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello", "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test emptyBody {
+    {
+        let response = sent(HttpResponse(204u32));
+        assert(response == "HTTP/1.1 204 No Content\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test contentType {
+    {
+        let json = sent(HttpResponse(200u32, body-> "{}", contentType-> "application/json"));
+        assert(contains(json, "\r\nContent-Type: application/json\r\n"), "a");
+
+        let untyped = sent(HttpResponse(200u32, body-> "raw", contentType-> ""));
+        assert(!contains(untyped, "Content-Type"), "b");
+        assert(untyped == "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nraw", "c");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test contentLengthFollowsTheBody { // the body sent is the one of the response, whatever the header says
+    {
+        let mut resp = HttpResponse(200u32, body-> "first");
+        resp.body = "replaced body";
+
+        let response = sent(resp);
+        assert(contains(response, "\r\nContent-Length: 13\r\n"), "a");
+        assert(response.endsWith("\r\n\r\nreplaced body"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test largeBody {
+    {
+        let body = copy ['x' ; 50000us];
+        let response = sent(HttpResponse(200u32, body-> body));
+        assert(contains(response, "\r\nContent-Length: 50000\r\n"), "a");
+        assert(response.endsWith("\r\n\r\n" ~ body), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test versions {
+    {
+        let mut resp = HttpResponse(200u32);
+
+        resp.header.version = HttpVersion::V0_9;
+        assert(sent(resp).startsWith("HTTP/0.9 200 OK\r\n"), "a");
+
+        resp.header.version = HttpVersion::V1_0;
+        assert(sent(resp).startsWith("HTTP/1.0 200 OK\r\n"), "b");
+
+        resp.header.version = HttpVersion::V1_1;
+        assert(sent(resp).startsWith("HTTP/1.1 200 OK\r\n"), "c");
+
+        resp.header.version = HttpVersion::V2_0;
+        assert(sent(resp).startsWith("HTTP/2 200 OK\r\n"), "d");
+
+        resp.header.version = HttpVersion::V3_0;
+        assert(sent(resp).startsWith("HTTP/3 200 OK\r\n"), "e");
+
+        resp.header.version = HttpVersion::UNSPECIFIED;
+        assert(sent(resp).startsWith("HTTP/1.1 200 OK\r\n"), "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test everyCodeHasItsReason {
+    {
+        for c in HttpResponseCode::__members__ {
+            let line = "HTTP/1.1 " ~ (c._0).to!{[c8]} () ~ " " ~ c._1 ~ "\r\n";
+            assert(sent(HttpResponse(c._0)).startsWith(line), line);
+        }
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test unknownCode { // a code with no reason phrase still has its status line
+    {
+        let response = sent(HttpResponse(299u32));
+        assert(response.startsWith("HTTP/1.1 299 \r\nContent-Type: text/plain\r\n"), "a");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
