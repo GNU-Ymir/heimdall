@@ -1,6 +1,7 @@
 in server;
 
 use std::algorithm::searching;
+use std::conv;
 use std::fs;
 use std::io;
 use std::log;
@@ -27,6 +28,14 @@ fn onParam(rqt: HttpRequest)-> HttpResponse {
     } else {
         HttpResponse(400u32)
     }
+}
+
+fn onTeapot(_: HttpRequest)-> HttpResponse {
+    HttpResponse(418u32, body-> "short and stout")
+}
+
+fn onMissing(rqt: HttpRequest)-> HttpResponse {
+    HttpResponse(404u32, body-> "nothing at " ~ rqt.url.toStr())
 }
 
 /**
@@ -202,4 +211,164 @@ __test closedConnectionIsNoWarning {
     assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "the next connection should still be answered");
     assert(contains(logs[], "client closed the connection before the response was sent"), "the closed connection should be logged at debug");
     assert(!contains(logs[], "failed to send a response"), "a closed connection is not a warning");
+}
+
+fn methodRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/read"), &onHello);
+    server:.route(Path("/write"), &onHello, method-> HttpRequestKind::POST | HttpRequestKind::PUT);
+    server:.route(Path("/any"), &onHello, method-> HttpRequestKind::ANY);
+    server:.route(Path("/none"), &onHello, method-> HttpRequestKind::NONE);
+}
+
+__test routesByMethod {
+    {
+        assert(roundTrip("GET /read HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(roundTrip("POST /read HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 405 "), "b");
+
+        assert(roundTrip("POST /write HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "c");
+        assert(roundTrip("PUT /write HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "d");
+        assert(roundTrip("GET /write HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 405 "), "e");
+
+        assert(roundTrip("PATCH /any HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "f");
+        assert(roundTrip("GET /none HTTP/1.1\r\n\r\n", routes-> &methodRoutes).startsWith("HTTP/1.1 405 "), "g");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test refusalsKeepTheRequestVersion {
+    {
+        assert(roundTrip("GET /missing HTTP/1.0\r\n\r\n").startsWith("HTTP/1.0 404 Not Found\r\n"), "a");
+        assert(roundTrip("DELETE /hello HTTP/1.0\r\n\r\n").startsWith("HTTP/1.0 405 Method Not Allowed\r\n"), "b");
+        assert(roundTrip("GET /hello HTTP/1.0\r\n\r\n").startsWith("HTTP/1.1 200 OK\r\n"), "c"); // a handler's response sets its own version
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test parametersDoNotChangeTheRoute {
+    {
+        let response = roundTrip("GET /hello?name=x HTTP/1.1\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(response.endsWith("\r\n\r\nhello"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test handlerCodeAndBody {
+    {
+        let response = roundTrip("GET /teapot HTTP/1.1\r\n\r\n", routes-> &teapotRoutes);
+        assert(response.startsWith("HTTP/1.1 418 I'm a teapot\r\n"), "a");
+        assert(response.endsWith("\r\n\r\nshort and stout"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+fn teapotRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/teapot"), &onTeapot);
+}
+
+fn replacedRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/hello"), &onHello);
+    server:.route(Path("/hello"), &onTeapot, method-> HttpRequestKind::POST);
+}
+
+__test aRouteReplacesThePreviousOne {
+    {
+        assert(roundTrip("POST /hello HTTP/1.1\r\n\r\n", routes-> &replacedRoutes).startsWith("HTTP/1.1 418 "), "a");
+        assert(roundTrip("GET /hello HTTP/1.1\r\n\r\n", routes-> &replacedRoutes).startsWith("HTTP/1.1 405 "), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+fn deletedRoutes(dmut server: &HttpServer) {
+    defaultRoutes(alias server);
+    server:.del(Path("/hello"));
+    server:.del(Path("/never-routed"));
+}
+
+__test deletedRoute {
+    {
+        assert(roundTrip("GET /hello HTTP/1.1\r\n\r\n", routes-> &deletedRoutes).startsWith("HTTP/1.1 404 "), "a");
+        assert(roundTrip("GET /param?name=x HTTP/1.1\r\n\r\n", routes-> &deletedRoutes).startsWith("HTTP/1.1 200 OK\r\n"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+fn custom404Routes(dmut server: &HttpServer) {
+    defaultRoutes(alias server);
+    server:.setOn404(&onMissing);
+}
+
+fn reset404Routes(dmut server: &HttpServer) {
+    custom404Routes(alias server);
+    server:.delOn404();
+}
+
+__test custom404 {
+    {
+        let custom = roundTrip("GET /nowhere HTTP/1.1\r\n\r\n", routes-> &custom404Routes);
+        assert(custom.startsWith("HTTP/1.1 404 Not Found\r\n"), "a");
+        assert(custom.endsWith("\r\n\r\nnothing at /nowhere"), "b");
+
+        let routed = roundTrip("GET /hello HTTP/1.1\r\n\r\n", routes-> &custom404Routes);
+        assert(routed.endsWith("\r\n\r\nhello"), "c"); // a route outranks the 404 handler
+
+        let wrongMethod = roundTrip("DELETE /hello HTTP/1.1\r\n\r\n", routes-> &custom404Routes);
+        assert(wrongMethod.startsWith("HTTP/1.1 405 "), "d"); // the 404 handler is not called on a 405
+
+        let reset = roundTrip("GET /nowhere HTTP/1.1\r\n\r\n", routes-> &reset404Routes);
+        assert(reset.startsWith("HTTP/1.1 404 Not Found\r\n"), "e");
+        assert(reset.endsWith("\r\n\r\n"), "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test servesSeveralRequests {
+    {
+        let dmut server = startOnLoopback();
+        for i in 0 .. 8 {
+            let response = exchange(server.port, "GET /param?name=n" ~ i.to!{[c8]} () ~ " HTTP/1.1\r\n\r\n");
+            assert(response.endsWith("\r\n\r\nn" ~ i.to!{[c8]} ()), "a");
+        }
+
+        server:.kill();
+        server:.join();
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test refusalsAreAnswered { // a request refused while being read is answered in HTTP/1.1, with its code
+    {
+        assert(roundTrip("GET /hello HTTP/1.1\r\nContent-Length: x\r\n\r\n").startsWith("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n"), "a");
+        assert(roundTrip("GET /hello HTTP/1.0\r\nHost: 127.0.0.1:x\r\n\r\n").startsWith("HTTP/1.1 400 Bad Request\r\n"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test releasesItsPort { // a stopped server closes its listener, another one can bind the same port
+    {
+        let dmut first = startOnLoopback();
+        let port = first.port;
+        first:.kill();
+        first:.join();
+
+        let dmut second = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), port), nbThreads-> 2u32);
+        defaultRoutes(alias second);
+        second:.start();
+
+        assert(exchange(port, "GET /hello HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 200 OK\r\n"), "a");
+
+        second:.kill();
+        second:.join();
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
 }
