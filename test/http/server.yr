@@ -30,32 +30,25 @@ fn onParam(rqt: HttpRequest)-> HttpResponse {
 }
 
 /**
- * Start a server answering `/hello`, `/echo` (POST) and `/param` on the loopback, on the first
- * free port of a small range
- * @info: `TcpListener` reports the address it was built with, never the one the kernel picked,
- *        so a port cannot be left to the kernel and has to be searched for instead
+ * Answer `/hello`, `/echo` (POST) and `/param`
  * */
-fn startOnLoopback(nbThreads: u32 = 2u32)-> dmut &HttpServer
+fn defaultRoutes(dmut server: &HttpServer) {
+    server:.route(Path("/hello"), &onHello);
+    server:.route(Path("/echo"), &onEcho, method-> HttpRequestKind::POST);
+    server:.route(Path("/param"), &onParam);
+}
+
+/**
+ * Start a server whose routes are set by `routes`, on a port of the loopback picked by the kernel
+ * */
+fn startOnLoopback(routes: fn (dmut &HttpServer)-> void = &defaultRoutes, nbThreads: u32 = 2u32)-> dmut &HttpServer
     throws HttpError
 {
-    let mut last: (&HttpError)? = none;
-    for i in 0u16 .. 32u16 {
-        {
-            let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 35180u16 + i), nbThreads-> nbThreads);
-            server:.route(Path("/hello"), &onHello);
-            server:.route(Path("/echo"), &onEcho, method-> HttpRequestKind::POST);
-            server:.route(Path("/param"), &onParam);
-            server:.start();
+    let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 0u16), nbThreads-> nbThreads);
+    routes(alias server);
+    server:.start();
 
-            return alias server;
-        } catch {
-            err: &HttpError => { last = err?; }
-        }
-    }
-
-    if let Ok(err) = last { throw err; }
-
-    throw copy HttpError(500u32, msg-> "no free loopback port in the probed range");
+    alias server
 }
 
 /**
@@ -87,10 +80,10 @@ fn exchange(port: u16, raw: [c8])-> [c8] {
 /**
  * @returns: the answer of a fresh server to `raw`, the server being stopped before returning
  * */
-fn roundTrip(raw: [c8])-> [c8]
+fn roundTrip(raw: [c8], routes: fn (dmut &HttpServer)-> void = &defaultRoutes)-> [c8]
     throws HttpError
 {
-    let dmut server = startOnLoopback();
+    let dmut server = startOnLoopback(routes-> routes);
     let response = exchange(server.port, raw);
 
     server:.kill();
