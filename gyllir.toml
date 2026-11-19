@@ -3,7 +3,7 @@ authors = ["Emile Cadorel <ecadorel@gmail.com>"]
 libraries = []
 type = "library"
 description = "HTTP server and actor system of Ymir"
-version = "0.1.0"
+version = "0.2.0"
 name = "heimdall"
 package-root = "heimdall"
 
