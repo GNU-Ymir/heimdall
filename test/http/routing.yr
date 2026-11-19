@@ -1,0 +1,229 @@
+in routing;
+
+use std::algorithm::searching;
+use std::conv;
+use std::fs;
+use std::io;
+use std::net;
+
+use heimdall::http;
+
+use helpers;
+use loopback;
+
+#[route ("/users/{id}", group-> "routing")]
+fn getUser(id: u64)-> [c8] {
+    "user " ~ id.to!{[c8]} ()
+}
+
+#[route ("/sum/{a}/{b}", group-> "routing")]
+fn sum(a: i32, b: f64, scale: i32)-> [c8] {
+    (cast!f64(a * scale) + b).to!{[c8]} ()
+}
+
+#[route ("/search", group-> "routing")]
+fn search(q: [c8], exact: bool)-> [c8] {
+    if exact { "exactly " ~ q } else { "like " ~ q }
+}
+
+#[route ("/agent/{name}", group-> "routing")]
+fn agent(rqt: HttpRequest, name: [c8])-> HttpResponse {
+    HttpResponse(201u32, body-> name ~ " with " ~ rqt.header.userAgent)
+}
+
+#[route ("/files/{*path}", group-> "routing")]
+fn files(path: [c8])-> [c8] {
+    "file " ~ path
+}
+
+#[route ("/items/new", group-> "routing")]
+fn newItem()-> [c8] {
+    "new item"
+}
+
+#[route ("/items/{id}", group-> "routing")]
+fn item(id: u32)-> [c8] {
+    "item " ~ id.to!{[c8]} ()
+}
+
+#[route ("/items/{*rest}", group-> "routing")]
+fn items(rest: [c8])-> [c8] {
+    "items under " ~ rest
+}
+
+#[route ("/items/{id}", method-> HttpRequestKind::PUT + HttpRequestKind::DELETE, group-> "routing")]
+fn changeItem(rqt: HttpRequest, id: u32)-> [c8] {
+    (if rqt.method == HttpRequestKind::PUT { "PUT" } else { "DELETE" }) ~ " item " ~ id.to!{[c8]} ()
+}
+
+#[route ("/forbidden/{id}", group-> "routing")]
+fn forbidden(id: u32)-> [c8]
+    throws HttpError
+{
+    if id == 0u32 { throw copy HttpError(403u32, msg-> "not this one"); }
+    "allowed"
+}
+
+#[route ("/", group-> "routing")]
+fn root()-> HttpResponse {
+    HttpResponse(200u32, body-> "root")
+}
+
+#[route ("/users/{id}", group-> "other")]
+fn otherUser(id: [c8])-> [c8] {
+    "other user " ~ id
+}
+
+/**
+ * @returns: the answer of a fresh server of `group` to `raw`, the server being stopped before returning
+ * */
+fn ask(raw: [c8], group: [c8] = "routing")-> [c8]
+    throws HttpError
+{
+    let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 0u16), nbThreads-> 2u32, group-> group);
+    server:.start();
+    let response = exchange(server.port, raw);
+
+    server:.kill();
+    server:.join();
+
+    response
+}
+
+fn get(path: [c8], group: [c8] = "routing")-> [c8]
+    throws HttpError
+{
+    ask("GET " ~ path ~ " HTTP/1.1\r\n\r\n", group-> group)
+}
+
+__test bindsPathParameters {
+    {
+        let response = get("/users/42");
+        assert(response.startsWith("HTTP/1.1 200 OK\r\n"), "a");
+        assert(contains(response, "Content-Type: text/plain\r\n"), "b");
+        assert(response.endsWith("\r\n\r\nuser 42"), "c");
+
+        assert(get("/sum/3/0.5?scale=2").endsWith("\r\n\r\n6.500000"), "d");
+        assert(get("/sum/-3/1?scale=1").endsWith("\r\n\r\n-2.000000"), "e");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test bindsQueryParameters {
+    {
+        assert(get("/search?q=heimdall&exact=true").endsWith("\r\n\r\nexactly heimdall"), "a");
+        assert(get("/search?q=heimdall&exact=0").endsWith("\r\n\r\nlike heimdall"), "b");
+        assert(get("/search?exact&q=x").endsWith("\r\n\r\nexactly x"), "c"); // a flag without value is true
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test bindsTheRequest {
+    {
+        let response = ask("GET /agent/bob HTTP/1.1\r\nUser-Agent: curl\r\n\r\n");
+        assert(response.startsWith("HTTP/1.1 201 Created\r\n"), "a");
+        assert(response.endsWith("\r\n\r\nbob with curl"), "b");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test refusesUnboundParameters {
+    {
+        let invalid = get("/users/abc");
+        assert(invalid.startsWith("HTTP/1.1 400 Bad Request\r\n"), "a");
+        assert(invalid.endsWith("\r\n\r\ninvalid value for parameter id: abc"), "b");
+
+        assert(get("/users/-1").startsWith("HTTP/1.1 400 "), "c");
+        assert(get("/sum/1/x?scale=1").endsWith("\r\n\r\ninvalid value for parameter b: x"), "d");
+        assert(get("/sum/1/2").endsWith("\r\n\r\nmissing parameter scale"), "e");
+        assert(get("/search?q=x&exact=maybe").endsWith("\r\n\r\ninvalid value for parameter exact: maybe"), "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test matchesAWildcard {
+    {
+        assert(get("/files/a/b/c.txt").endsWith("\r\n\r\nfile a/b/c.txt"), "a");
+        assert(get("/files/").endsWith("\r\n\r\nfile "), "b");
+        assert(get("/").endsWith("\r\n\r\nroot"), "c");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test prefersExactThenParameterThenWildcard {
+    {
+        assert(get("/items/new").endsWith("\r\n\r\nnew item"), "a");
+        assert(get("/items/12").endsWith("\r\n\r\nitem 12"), "b");
+        assert(get("/items/12/parts").endsWith("\r\n\r\nitems under 12/parts"), "c");
+        assert(get("/items/x").startsWith("HTTP/1.1 400 "), "d"); // a parameter does not fall back to the wildcard
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test routesByMethod {
+    {
+        assert(ask("PUT /items/3 HTTP/1.1\r\n\r\n").endsWith("\r\n\r\nPUT item 3"), "a");
+        assert(ask("DELETE /items/3 HTTP/1.1\r\n\r\n").endsWith("\r\n\r\nDELETE item 3"), "b");
+
+        let refused = ask("POST /users/3 HTTP/1.1\r\n\r\n");
+        assert(refused.startsWith("HTTP/1.1 405 Method Not Allowed\r\n"), "c");
+        assert(contains(refused, "\r\nAllow: GET\r\n"), "d");
+
+        assert(contains(ask("PATCH /items/new HTTP/1.1\r\n\r\n"), "\r\nAllow: GET, PUT, DELETE\r\n"), "e");
+        assert(get("/nowhere").startsWith("HTTP/1.1 404 Not Found\r\n"), "f");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test answersAThrownError {
+    {
+        let refused = get("/forbidden/0");
+        assert(refused.startsWith("HTTP/1.1 403 Forbidden\r\n"), "a");
+        assert(refused.endsWith("\r\n\r\nnot this one"), "b");
+        assert(get("/forbidden/1").endsWith("\r\n\r\nallowed"), "c");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+__test serversAnswerTheirGroup {
+    {
+        assert(get("/users/7", group-> "other").endsWith("\r\n\r\nother user 7"), "a");
+        assert(get("/search?q=x&exact", group-> "other").startsWith("HTTP/1.1 404 "), "b");
+        assert(get("/users/7", group-> "").startsWith("HTTP/1.1 404 "), "c");
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}
+
+fn onPattern(rqt: HttpRequest)-> HttpResponse {
+    if let Ok(v) = rqt.pathParameters["name"] {
+        HttpResponse(200u32, body-> "hello " ~ v)
+    } else {
+        HttpResponse(500u32)
+    }
+}
+
+__test runtimeRoutesArePatterns {
+    {
+        let dmut server = copy HttpServer(SockAddr(copy Ipv4Addr([127u8, 0u8, 0u8, 1u8]), 0u16), nbThreads-> 2u32, group-> "routing");
+        server:.route(Path("/hello/{name}"), &onPattern);
+        server:.route(Path("/users/{who}"), &onPattern); // replaces the tagged route
+        server:.start();
+
+        assert(exchange(server.port, "GET /hello/you HTTP/1.1\r\n\r\n").endsWith("\r\n\r\nhello you"), "a");
+        assert(exchange(server.port, "GET /users/1 HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 500 "), "b");
+
+        server:.kill();
+        server:.join();
+    } catch {
+        err => { println(err); assert(false, "threw"); }
+    }
+}

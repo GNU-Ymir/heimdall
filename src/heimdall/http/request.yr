@@ -23,6 +23,9 @@ pub record HttpRequest {
     // The parameters passed to the request
     let mut _params: [[c8] => mut[c8]] = copy [];
 
+    // The values of the parameters of the route answering the request
+    let mut _pathParams: [[c8] => [c8]] = copy [];
+
     // The header of the request
     let mut _header: header::HttpHeader = header::HttpHeader();
 
@@ -104,9 +107,24 @@ pub record HttpRequest {
         self._params
     }
 
+    /**
+     * @returns: the values the parameters and the wildcard of the route answering the request took from its url
+     * */
+    @field
+    pub fn pathParameters(self)-> [[c8] => [c8]] {
+        self._pathParams
+    }
+
     @field
     pub fn body(self)-> [c8] {
         self._body
+    }
+
+    /**
+     * Set the values the parameters of the route answering the request took from its url
+     * */
+    pub fn setPathParameters(mut self, params: [[c8] => [c8]]) {
+        self._pathParams = params;
     }
 
 

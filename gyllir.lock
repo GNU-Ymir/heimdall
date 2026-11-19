@@ -5,5 +5,5 @@ lock-version = 1
 [[package]]
 name = "std"
 url = "git:https://github.com/GNU-Ymir/yruntime.git"
-version = "3.0.0"
-sha = "5f707cc800e5fc1a120d3f7c2f860a1dcfa7e225"
+version = "4.0.0"
+sha = "b80034afe0fdd956131761dd28112fe424d64a44"

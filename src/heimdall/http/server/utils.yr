@@ -1,0 +1,25 @@
+/**
+ * Module containing the utilities of the http server
+ * @authors: Emile Cadorel
+ * @license: GPLv3
+ */
+
+in utils;
+
+/**
+ * @returns: the names of the methods of the mask `methods`, separated by commas
+ * */
+pub fn methodNames(methods: u32)-> [c8] {
+    let kinds = header::HttpRequestKind::__members__;
+    let names = header::HttpRequestKindNames::__members__;
+    let mut res = "";
+    for i in 0us .. names.len {
+        let k: u32 = kinds[i];
+        if (k & methods) != 0u32 {
+            if res != "" { res = res ~ ", "; }
+            res = res ~ names[i];
+        }
+    }
+
+    res
+}

@@ -41,6 +41,12 @@ nothing else: a title without a valid tag is left out of both, silently.
 
 ## Policy
 
+Code layout:
+- one class (or record) per file
+- free functions go in a `utils` submodule, or in the `@companion` module of the class/record they
+  belong to (`pub mod X` next to `X`, its functions `pub` to be reached from `X` or another module;
+  tags and enums have none)
+
 Concise comments:
 - only describe what the functions do, not what the current work is adding
 - don't write comments inside code unless absolutely necessary for understanding
@@ -71,7 +77,9 @@ The layout of the other non-midgard Ymir projects (`../bootstrap`, `../ymir-lsp`
   release, `[registry]` this repository.
 - `src/heimdall.yr`: the package root, declaring `heimdall::http` and `heimdall::actor`.
 - `src/heimdall/http*`: the HTTP server (`server`, `request`, `response`, `header`, `errors`),
-  formerly `std::net::http`.
+  formerly `std::net::http`, its route table (`router`, `router::{route,segment,utils}`) and the
+  `#[route]` tag binding a handler's parameters through `__pragma!parameter_infos`/`parameter_type`
+  (`routing`, `routing::utils`).
 - `src/heimdall/actor*`: the actor system (`base`, `errors`, `reference`, `request`, `sys`,
   `sys::{message,utils}`), formerly `std::concurrency::actor`.
 - `test/__test__.yr`: the test root, mirroring `src/` (`test/http/…`, `test/actor/…`).

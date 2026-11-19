@@ -1,0 +1,190 @@
+/**
+ * Module containing the compile time checks and the parameter bindings of the `#[route]` tag
+ * @authors: Emile Cadorel
+ * @license: GPLv3
+ */
+
+in utils;
+
+use std::{conv, log, traits};
+
+use heimdall::http::{errors, request, response};
+
+lazy __LOG__ = Logger("heimdall::http::routing");
+
+/*!
+ * ====================================================================================================
+ * ====================================================================================================
+ * ==================================          CTE CHECKS          ====================================
+ * ====================================================================================================
+ * ====================================================================================================
+ */
+
+/**
+ * The index of the first `}` of `p` from `i`, `p.len` if there is none
+ */
+pub def if (i >= p.len) closeAt {p: [c8], i: usize} = p.len;
+pub def if (i < p.len) closeAt {p: [c8], i: usize} = closeAtChar!{p, i, p[i]};
+
+def if (c == '}') closeAtChar {p: [c8], i: usize, c: c8} = i;
+def if (c != '}') closeAtChar {p: [c8], i: usize, c: c8} = closeAt!{p, i + 1us};
+
+/**
+ * The name of the parameter or the wildcard whose `{` is at index `i` of `p`
+ */
+pub def if (i + 1us < p.len) placeholder {p: [c8], i: usize} = placeholderFrom!{p, i, p[i + 1us]};
+pub def if (i + 1us >= p.len) placeholder {p: [c8], i: usize} = "";
+
+def if (c == '*') placeholderFrom {p: [c8], i: usize, c: c8} = p[i + 2us .. closeAt!{p, i}];
+def if (c != '*') placeholderFrom {p: [c8], i: usize, c: c8} = p[i + 1us .. closeAt!{p, i}];
+
+/**
+ * True if `F` has a parameter named `param`, from its `I`th one
+ */
+pub def if (I >= __pragma!parameter_infos (F).len) isBound {fn F, param: [c8], I: usize} = false;
+pub def if (I < __pragma!parameter_infos (F).len) isBound {fn F, param: [c8], I: usize} = cte (
+    __pragma!parameter_infos (F)[I].name == param || isBound!{F, param, I + 1us}
+);
+
+/**
+ * True if a parameter of type `T` can be bound to a request
+ */
+pub def isBindable {T} = cte (isRequest!{T} || isValue!{T});
+
+def isRequest {T} = cte (template!{T}{U of request::HttpRequest});
+
+def isValue {T} = cte (template!{T}{U of [c8]} || template!{T}{U of bool} || isIntegral!{T} || isFloating!{T});
+
+/**
+ * True if a route can return a value of type `T`
+ */
+pub def isAnswer {T} = cte (template!{T}{U of response::HttpResponse} || template!{T}{U of [c8]});
+
+/*!
+ * ====================================================================================================
+ * ====================================================================================================
+ * ===================================          BINDING          ======================================
+ * ====================================================================================================
+ * ====================================================================================================
+ */
+
+/**
+ * Call `F` with the parameters bound from `rqt`, and answer with what it returns
+ * */
+pub fn invoke {fn F} (rqt: request::HttpRequest)-> response::HttpResponse {
+    cte if (__pragma!parameter_infos (F).len == 0us) {
+        cte if (__pragma!function_infos (F).isThrowing) {
+            {
+                answer(F ())
+            } catch {
+                err => failure(rqt, err)
+            }
+        } else {
+            let _ = rqt;
+            answer(F ())
+        }
+    } else {
+        let mut unbound = "";
+        let args = collect!{F, 1us} (rqt, ref unbound, (bind!{F, 0us} (rqt, ref unbound),));
+        if unbound != "" {
+            return refusal(rqt, 400u32, unbound);
+        }
+
+        cte if (__pragma!function_infos (F).isThrowing) {
+            {
+                answer(F (expand args))
+            } catch {
+                err => failure(rqt, err)
+            }
+        } else {
+            answer(F (expand args))
+        }
+    }
+}
+
+/**
+ * Add to `args` the parameters of `F` from the `N`th one
+ * */
+pub fn if (__pragma!parameter_infos (F).len == N) collect {fn F, N: usize, T} (rqt: request::HttpRequest, ref mut err: [c8], args: T)-> T {
+    let _ = (rqt, err);
+    args
+}
+
+pub fn if (__pragma!parameter_infos (F).len != N) collect {fn F, N: usize, T} (rqt: request::HttpRequest, ref mut err: [c8], args: T)
+    -> typeof (collect!{F, N + 1us} (rqt, ref err, (expand args, bind!{F, N} (rqt, ref err))))
+{
+    collect!{F, N + 1us} (rqt, ref err, (expand args, bind!{F, N} (rqt, ref err)))
+}
+
+/**
+ * The `I`th parameter of `F` bound from `rqt`, its type's init value with `err` set if it cannot be
+ * */
+pub fn if (isRequest!{__pragma!parameter_type (F, I)}) bind {fn F, I: usize} (rqt: request::HttpRequest, ref mut err: [c8])-> request::HttpRequest {
+    let _ = err;
+    rqt
+}
+
+pub fn if (!isRequest!{__pragma!parameter_type (F, I)}) bind {fn F, I: usize} (rqt: request::HttpRequest, ref mut err: [c8])-> __pragma!parameter_type (F, I) {
+    let name = cte { __pragma!parameter_infos (F)[I].name };
+    let value = if let Ok(v) = rqt.pathParameters[name] {
+        v
+    } else if let Ok(v) = rqt.parameters[name] {
+        v
+    } else {
+        if err == "" { err = "missing parameter " ~ name; }
+        return __pragma!parameter_type (F, I)::init;
+    };
+
+    if let Ok(v) = convert!{__pragma!parameter_type (F, I)} (value) {
+        v
+    } else {
+        if err == "" { err = "invalid value for parameter " ~ name ~ ": " ~ value; }
+        __pragma!parameter_type (F, I)::init
+    }
+}
+
+/**
+ * Convert the value of a parameter
+ * */
+pub fn convert {T} (value: [c8])-> (T)? {
+    cte if (template!{T}{U of [c8]}) {
+        (value)?
+    } else cte if (template!{T}{U of bool}) {
+        match value {
+            "true" | "1" | "" => (true)?
+            "false" | "0" => (false)?
+            _ => none
+        }
+    } else {
+        (to!{T} (value))?
+    }
+}
+
+/**
+ * The response to a value returned by a route
+ * */
+pub fn answer {T} (value: T)-> response::HttpResponse {
+    cte if (template!{T}{U of response::HttpResponse}) {
+        value
+    } else {
+        response::HttpResponse(200u32, body-> value)
+    }
+}
+
+fn refusal(rqt: request::HttpRequest, code: u32, msg: [c8])-> response::HttpResponse {
+    let dmut ret = response::HttpResponse(code, body-> msg);
+    ret.header.version = rqt.header.version;
+    ret
+}
+
+/**
+ * The response to an error thrown by a route, an `HttpError` being answered with its code and message
+ * */
+fn failure(rqt: request::HttpRequest, err: &Exception)-> response::HttpResponse {
+    if let e: &errors::HttpError = err {
+        return refusal(rqt, e.code, e.msg);
+    }
+
+    __LOG__.warn("route ", rqt.url, " failed: ", err);
+    refusal(rqt, 500u32, "")
+}
